@@ -1,0 +1,67 @@
+# Spike-only override: run the self-host stack on the localenv network.
+#
+# Layered on top of docker-compose.selfhost.yml (+ .build.yml to build from this
+# checkout):
+#
+#   1. backend and frontend join the external `localenv` network, so they can
+#      reach mailpit / localstack / the otel collector by their .internal
+#      aliases and Caddy can see the frontend.
+#   2. ONE browser origin: https://app.multica.localhost. The web app already
+#      proxies /api, /ws and /uploads to the backend (apps/web/next.config.ts
+#      rewrites, REMOTE_API_URL), so the backend needs no hostname of its own.
+#      A second hostname was tried first and does not work: the auth cookie is
+#      SameSite=Strict and the CSRF cookie is read by JS on the app origin, so
+#      serving the API from api.multica.localhost fails every state-changing
+#      request with "CSRF validation failed". COOKIE_DOMAIN=.multica.localhost
+#      does not rescue it.
+#   3. `caddy.tls: internal` rather than `caddy.import: local-defaults` —
+#      that snippet's cors rule sets `Access-Control-Allow-Origin: *` with `>`,
+#      and a wildcard origin alongside `Access-Control-Allow-Credentials: true`
+#      is rejected by the browser.
+#   4. postgres publishes 5433 on the host — 5432 is taken by veezeet-api — so
+#      host-side tools (psql, cmd/migrate) reach the same database.
+#
+# The backend keeps its host port: the agent daemon runs on this machine, not
+# in a container, and reaches the API at http://localhost:8080.
+
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5433:5432"
+    networks:
+      default:
+
+  backend:
+    networks:
+      default:
+      localenv:
+        aliases:
+          - api.multica.internal
+    # https://api.multica.localhost is for NON-BROWSER callers only — the CLI,
+    # the daemon, curl. They authenticate with a Bearer token, so none of the
+    # cookie problems above apply to them.
+    #
+    # The web app must NOT be pointed here. Its auth cookie is SameSite=Strict
+    # and its CSRF cookie is read by JS on the app origin, so a cross-host API
+    # fails every state-changing request with "CSRF validation failed".
+    # NEXT_PUBLIC_API_URL stays empty for that reason.
+    labels:
+      caddy: api.multica.localhost
+      caddy.tls: internal
+      caddy.reverse_proxy: "{{upstreams 8080}}"
+
+  frontend:
+    networks:
+      default:
+      localenv:
+        aliases:
+          - app.multica.internal
+    labels:
+      caddy: app.multica.localhost
+      caddy.tls: internal
+      caddy.reverse_proxy: "{{upstreams 3000}}"
+
+networks:
+  localenv:
+    name: localenv
+    external: true
