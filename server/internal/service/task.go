@@ -1264,7 +1264,36 @@ func (s *TaskService) enqueueIssueTaskWithCommentPlan(ctx context.Context, issue
 		slog.Debug("task enqueue skipped: agent is archived", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agent.ID))
 		return db.AgentTaskQueue{}, fmt.Errorf("agent is archived")
 	}
-	if !agent.RuntimeID.Valid {
+	// SPIKE: the issue's routing policy, resolved to the runtime this task is
+	// provisionally stamped with. taskRuntimeID is what goes on the row; the
+	// claim re-resolves the policy and may land the run somewhere else entirely.
+	//
+	// Note what this gate does NOT say any more: a routed task does not need the
+	// agent to have a runtime at all. That is the first place the two models
+	// genuinely part company — Multica refuses to enqueue work for an unbound
+	// agent because an agent with no machine can never run; a routed task has
+	// its own machine and does not care what the agent is bound to.
+	taskRuntimeID := agent.RuntimeID
+	routingPolicy := issue.RoutingPolicy
+	if routingPolicy.Valid && routingPolicy.String != "" {
+		resolved, rerr := s.Queries.ResolveRoutingPolicyRuntime(ctx, db.ResolveRoutingPolicyRuntimeParams{
+			WorkspaceID: issue.WorkspaceID,
+			Policy:      routingPolicy.String,
+		})
+		if rerr != nil {
+			if errors.Is(rerr, pgx.ErrNoRows) {
+				// The honest boundary. Migration 251's CHECK needs a machine now,
+				// and no registered machine satisfies this policy, so the row
+				// cannot be written. A task that waits for a machine which has
+				// never registered is not representable in this model.
+				slog.Error("task enqueue failed: routing policy matches no registered runtime",
+					"issue_id", util.UUIDToString(issue.ID), "routing_policy", routingPolicy.String)
+				return db.AgentTaskQueue{}, fmt.Errorf("routing policy %q matches no registered runtime", routingPolicy.String)
+			}
+			return db.AgentTaskQueue{}, fmt.Errorf("resolve routing policy: %w", rerr)
+		}
+		taskRuntimeID = resolved
+	} else if !agent.RuntimeID.Valid {
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", "agent has no runtime")
 		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
 	}
@@ -1286,10 +1315,12 @@ func (s *TaskService) enqueueIssueTaskWithCommentPlan(ctx context.Context, issue
 	runtimeMCPOverlay := s.buildRuntimeMCPOverlay(ctx, originatorUserID, agent)
 	attrSource, attrDelegatedFrom, attrEvidenceKind, attrEvidenceRef := attributionCreateParams(attr)
 	createParams := db.CreateAgentTaskParams{
-		ID:                   dbid.NewV7(),
-		AgentID:              issue.AssigneeID,
-		RuntimeID:            agent.RuntimeID,
-		IssueID:              issue.ID,
+		ID:      dbid.NewV7(),
+		AgentID: issue.AssigneeID,
+		// SPIKE: provisional when RoutingPolicy is set — see taskRuntimeID above.
+		RuntimeID:     taskRuntimeID,
+		RoutingPolicy: routingPolicy,
+		IssueID:       issue.ID,
 		Priority:             priorityToInt(issue.Priority),
 		TriggerCommentID:     triggerCommentID,
 		CoalescedCommentIds:  coalescedCommentIDs,
@@ -3496,9 +3527,28 @@ func (s *TaskService) claimTask(ctx context.Context, agentID, runtimeID pgtype.U
 		// before its state transition; the claim handler then rechecks the freshly
 		// loaded Agent before returning any payload. Runtime mutation teardown is
 		// responsible for serializing and settling the remaining queued rows.
+		//
+		// SPIKE: this fence is the one that hurts, and it is why routing could not
+		// be done in SQL alone. It asks a question about the AGENT at a moment
+		// when the only thing that should matter is the TASK, and it runs before
+		// any task row has been read — there is nothing here to consult a policy
+		// on. The pre-check is therefore skipped when this agent has any queued
+		// policy task for the candidate runtime, and ClaimAgentTask (which CAN
+		// see the row) makes the real decision. That extra query is pure cost
+		// imposed by the ordering, not by the feature.
 		if runtimeID.Valid && agent.RuntimeID != runtimeID {
-			outcome = "runtime_mismatch"
-			return nil
+			routed, rerr := qtx.HasRoutedTaskForAgentAndRuntime(ctx, db.HasRoutedTaskForAgentAndRuntimeParams{
+				AgentID:   agentID,
+				RuntimeID: runtimeID,
+			})
+			if rerr != nil {
+				outcome = "error_routed_check"
+				return fmt.Errorf("check routed task: %w", rerr)
+			}
+			if !routed {
+				outcome = "runtime_mismatch"
+				return nil
+			}
 		}
 
 		t0 = time.Now()
@@ -3993,7 +4043,11 @@ func (s *TaskService) ClaimTasksForRuntimes(ctx context.Context, runtimeIDs []pg
 		}
 		triedAgents[agentKey] = struct{}{}
 
-		task, err := s.claimTask(ctx, candidates[i].AgentID, candidates[i].RuntimeID)
+		// SPIKE: MatchRuntimeID, not RuntimeID. For a policy-free task they are
+		// the same value. For a policy task RuntimeID is the provisional stamp
+		// migration 251's CHECK forced at enqueue, and claiming on it would send
+		// the work straight back to the machine the policy exists to override.
+		task, err := s.claimTask(ctx, candidates[i].AgentID, candidates[i].MatchRuntimeID)
 		if err != nil {
 			// Each scoped claim commits in its own transaction, so earlier
 			// iterations (and step-2 reclaims) are already dispatched

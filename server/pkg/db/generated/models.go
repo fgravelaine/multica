@@ -176,6 +176,7 @@ type AgentTaskQueue struct {
 	CancelledByType           pgtype.Text `json:"cancelled_by_type"`
 	CancelledByID             pgtype.UUID `json:"cancelled_by_id"`
 	CancelledByName           pgtype.Text `json:"cancelled_by_name"`
+	RoutingPolicy             pgtype.Text `json:"routing_policy"`
 }
 
 type AgentToLabel struct {
@@ -791,6 +792,7 @@ type Issue struct {
 	Properties         []byte             `json:"properties"`
 	Revision           int64              `json:"revision"`
 	LastActivityAt     pgtype.Timestamptz `json:"last_activity_at"`
+	RoutingPolicy      pgtype.Text        `json:"routing_policy"`
 }
 
 type IssueDependency struct {

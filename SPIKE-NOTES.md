@@ -154,10 +154,98 @@ the CLI: an agent cannot exist without a machine.
 
 ---
 
+---
+
+## Spike 1 — task-level routing. It works, and it cost five fences.
+
+An issue carries `routing_policy`; every task it enqueues inherits it; the claim
+resolves it against whichever machine is asking for work. Two forms only —
+`runtime:<uuid>` and `provider:<name>` — because two is the minimum that proves
+dispatch-time resolution is a different thing from an enqueue-time copy.
+
+**Proof, run three times:**
+
+| agent | bound to | policy | ran on | result |
+|---|---|---|---|---|
+| Scout | claude | `provider:opencode` | opencode | reached opencode, opencode CLI exited 1 (not configured here) |
+| Drifter | opencode | `provider:claude` | claude | **completed**, replied `routed` |
+
+The second row is the whole spike in one line: the agent is bound to one
+machine and the run happened on another, on purpose, and the product did not
+notice anything was unusual.
+
+### The four places were five
+
+The code read found four. A fifth only appeared by running it, and it is the
+one that matters most:
+
+| # | Place | What it asserts |
+|---|---|---|
+| 1 | `service/task.go` enqueue | task runtime := `agent.runtime_id` |
+| 2 | `service/task.go:3488` | claim with no runtime resolves the agent's |
+| 3 | `service/task.go:3499` | claim with a runtime → `runtime_mismatch` unless it is the agent's |
+| 4 | `agent.sql` `ClaimAgentTask` | `a.runtime_id = atq.runtime_id` |
+| 5 | **`handler/daemon.go:2267`** | **after dispatch, before delivery: `agent.RuntimeID != task.RuntimeID` → fail the task** |
+
+Fence 5 is not a claim fence. The first routed task claimed correctly, was
+dispatched to the right machine, and then died with
+`invalid_task_identity`: *"The agent moved to another runtime before this task
+could start."* Which is a perfectly true sentence in a model where a task's
+runtime can only ever be a stale copy of its agent's. Nothing is wrong with
+that check — it is right about the world it was written for.
+
+**This is the finding a code read could not produce.** Four of the five say
+"the agent owns the machine" as an authorization rule. The fifth says it as a
+*definition of task identity*: a task whose runtime differs from its agent's is
+not a routed task, it is a corrupted one.
+
+### Where it was genuinely forced, not just tedious
+
+- **Fence 3 costs an extra query.** It runs before any task row is read, so
+  there is no policy to consult at that point. `HasRoutedTaskForAgentAndRuntime`
+  exists only to let it stand down. That is ordering, not feature cost.
+- **Fence 5 was skipped, and skipping lost something real.** That check also
+  catches an owner rebind mid-flight; a routed task no longer gets that. The
+  honest fix is not a condition — it is for the rebind guard to compare against
+  what the task *asked for* rather than against the agent, which changes what
+  "task identity" means.
+- **Nothing was hardcoded past the model.** Migration 251's CHECK is untouched.
+
+### The wall, stated exactly
+
+```sql
+CHECK (runtime_id IS NOT NULL OR completed_at IS NOT NULL)   -- migration 251
+```
+
+Migration 251 says, in its own words, that "an ACTIVE task must always have a
+runtime, so claim / dispatch / delivery-CAS paths can never observe
+runtime_id IS NULL". NULL is confined to history, deliberately.
+
+So a policy task must still name a machine at INSERT. Two consequences:
+
+1. **"Resolved at dispatch" can only ever be a RE-resolution.** The stamped
+   runtime is provisional and the claim overwrites it, but a first resolution
+   with no machine named is not expressible.
+2. **A task waiting for a machine that has never registered is not
+   representable.** `ResolveRoutingPolicyRuntime` returns no row and the enqueue
+   is refused. This is the one place the spike deliberately stops rather than
+   tunnelling: removing that CHECK is not a change to routing, it is a change to
+   what an active task is.
+
+### And the waiting fell out for free
+
+Nothing was written for it. An offline runtime does not satisfy
+`r.status = 'online'`, the row stays `queued`, and it runs when the machine
+returns — the behaviour already measured in the baseline, now also true across
+a policy. The only thing that does not fall out is waiting for a machine that
+does not exist yet, which is the CHECK again.
+
+---
+
 ## Status
 
 - [x] fork, clone, upstream remote
 - [x] running locally (Docker, on the localenv stack)
 - [x] baseline measured: queued work already waits
-- [ ] routing spike
+- [x] routing spike — works; five fences; one wall left standing
 - [ ] raised hand spike

@@ -1900,6 +1900,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Route("/{id}", func(r chi.Router) {
 					r.Get("/", h.GetIssue)
 					r.Put("/", h.UpdateIssue)
+					// SPIKE: task-level routing. Its own endpoint rather than a
+					// field on UpdateIssue, so the spike stays clear of the
+					// activity-log and status-transition machinery.
+					r.Put("/routing-policy", h.SetIssueRoutingPolicy)
 					r.Post("/move", h.MoveIssue)
 					r.Delete("/", h.DeleteIssue)
 					r.Post("/comments/trigger-preview", h.PreviewCommentTriggers)

@@ -297,11 +297,15 @@ ORDER BY created_at DESC;
 -- COALESCE keeps the column's gen_random_uuid() default reachable, so a caller
 -- that passes no id still inserts — it just gets a random v4, exactly as before.
 -- The same pattern is used by every INSERT listed in pkg/dbid's write table.
+-- SPIKE: routing_policy rides along. It is the ONE new input on this path; the
+-- provisional runtime_id ($2) is still required because migration 251's CHECK
+-- refuses an active task with no runtime.
 INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, trigger_comment_id,
     coalesced_comment_ids, trigger_summary, force_fresh_session, is_leader_task, handoff_note,
     squad_id, context, originator_user_id, accountable_user_id, runtime_mcp_overlay, runtime_connected_apps,
     originator_source, delegated_from_task_id, rule_version_id, rerun_of_task_id, trigger_evidence_kind, trigger_evidence_ref_id,
+    routing_policy,
     id
 )
 SELECT
@@ -327,9 +331,62 @@ SELECT
     sqlc.narg(rerun_of_task_id),
     sqlc.narg(trigger_evidence_kind),
     sqlc.narg(trigger_evidence_ref_id),
+    sqlc.narg(routing_policy),
     COALESCE(sqlc.narg('id')::uuid, gen_random_uuid())
 WHERE lock_task_owner_rows($1, $3, $2)
 RETURNING *;
+
+-- name: HasRoutedTaskForAgentAndRuntime :one
+-- SPIKE: does this agent have any queued policy task the given runtime may
+-- take? Exists purely to let claimTask's pre-claim rebind fence stand down; see
+-- the comment at that fence for why the ordering forces an extra query.
+SELECT EXISTS (
+    SELECT 1
+    FROM agent_task_queue atq
+    WHERE atq.agent_id = @agent_id
+      AND atq.status = 'queued'
+      AND atq.routing_policy IS NOT NULL
+      AND (
+          CASE
+              WHEN atq.routing_policy LIKE 'runtime:%'
+                  THEN substr(atq.routing_policy, 9)::uuid = @runtime_id::uuid
+              WHEN atq.routing_policy LIKE 'provider:%'
+                  THEN EXISTS (
+                      SELECT 1 FROM agent_runtime pr
+                      WHERE pr.id = @runtime_id::uuid
+                        AND pr.provider = substr(atq.routing_policy, 10)
+                  )
+              ELSE FALSE
+          END
+      )
+);
+
+-- name: ResolveRoutingPolicyRuntime :one
+-- SPIKE: the enqueue-time half of a routing policy.
+--
+-- It exists only because of migration 251's CHECK — an active task must name a
+-- machine, so a policy task needs one before it can be inserted at all. The
+-- runtime it returns is PROVISIONAL: ClaimAgentTask re-resolves the policy and
+-- overwrites runtime_id with whichever machine actually claims the work.
+--
+-- Online first, then any registered match, so a policy still enqueues while
+-- every matching machine is asleep — which is the case the spike cares about.
+-- No match at all returns no row, and the caller must refuse the enqueue: a
+-- task for a machine that has never registered is not representable here.
+SELECT r.id
+FROM agent_runtime r
+WHERE r.workspace_id = @workspace_id
+  AND (
+      CASE
+          WHEN @policy::text LIKE 'runtime:%'
+              THEN r.id = substr(@policy::text, 9)::uuid
+          WHEN @policy::text LIKE 'provider:%'
+              THEN r.provider = substr(@policy::text, 10)
+          ELSE FALSE
+      END
+  )
+ORDER BY (r.status = 'online') DESC, r.last_seen_at DESC NULLS LAST, r.id
+LIMIT 1;
 
 -- name: CreateDeferredChannelIssueTask :one
 -- Fenced against workspace teardown: lock_task_owner_rows (migration 284)
@@ -729,22 +786,47 @@ WHERE atq.id = $1 AND a.workspace_id = $2;
 -- "any other quick-create-shaped task" (all four FKs NULL) for the same agent —
 -- otherwise a user mashing the create button could fire concurrent quick-creates
 -- whose completion lookup would race over "most recent issue by this agent".
+-- SPIKE: `runtime_id = @runtime_id` becomes "this runtime is an acceptable
+-- target", and the claim RE-STAMPS runtime_id with whoever actually won. For a
+-- policy-free task nothing changes: the only acceptable target is the stamped
+-- one, and the `a.runtime_id = atq.runtime_id` rebind fence still applies.
+-- For a policy task the stamped runtime is provisional (migration 251's CHECK
+-- forces one to exist), the rebind fence is deliberately NOT applied — the
+-- whole point is that this run does not follow the agent's binding — and the
+-- policy decides instead.
 UPDATE agent_task_queue
 SET status = 'dispatched',
     dispatched_at = now(),
+    runtime_id = @runtime_id,
     prepare_lease_expires_at = now() + make_interval(secs => @prepare_lease_secs::double precision)
 WHERE id = (
     SELECT atq.id FROM agent_task_queue atq
     WHERE atq.agent_id = @agent_id
-      AND atq.runtime_id = @runtime_id
       AND atq.status = 'queued'
+      AND (
+          CASE
+              WHEN atq.routing_policy IS NULL
+                  THEN atq.runtime_id = @runtime_id
+              WHEN atq.routing_policy LIKE 'runtime:%'
+                  THEN substr(atq.routing_policy, 9)::uuid = @runtime_id
+              WHEN atq.routing_policy LIKE 'provider:%'
+                  THEN EXISTS (
+                      SELECT 1 FROM agent_runtime pr
+                      WHERE pr.id = @runtime_id
+                        AND pr.provider = substr(atq.routing_policy, 10)
+                  )
+              ELSE FALSE
+          END
+      )
       AND EXISTS (
           SELECT 1
           FROM agent a
-          JOIN agent_runtime r ON r.id = atq.runtime_id
+          JOIN agent_runtime r ON r.id = @runtime_id
           WHERE a.id = atq.agent_id
             -- A task's persisted runtime is not authority after an agent rebind.
-            AND a.runtime_id = atq.runtime_id
+            -- SPIKE: ...unless the task carries a policy, which is precisely the
+            -- claim that this run's machine is the task's to decide.
+            AND (atq.routing_policy IS NOT NULL OR a.runtime_id = atq.runtime_id)
             -- Private runtimes only execute their owner's agents. Ownerless
             -- runtime/agent rows remain claimable only so the handler can
             -- settle them explicitly before daemon delivery; filtering them
@@ -2350,16 +2432,38 @@ RETURNING *;
 -- a sort step (each runtime's slice is index-ordered, but merging several
 -- runtimes' rows into one priority/FIFO order is not). The per-machine
 -- candidate set is small, so this is cheap in practice.
-SELECT atq.* FROM agent_task_queue atq
-WHERE atq.runtime_id = ANY(@runtime_ids::uuid[])
-  AND atq.status = 'queued'
+-- SPIKE: a candidate row now carries the runtime that may claim it, which is
+-- not always its own runtime_id. `match_runtime_id` is what the batch loop
+-- must pass to claimTask — reading task.RuntimeID there would send a policy
+-- task back to the machine it was provisionally stamped with.
+SELECT atq.*, rt.id AS match_runtime_id
+FROM agent_task_queue atq
+CROSS JOIN LATERAL (
+    SELECT r.id
+    FROM agent_runtime r
+    WHERE r.id = ANY(@runtime_ids::uuid[])
+      AND (
+          CASE
+              WHEN atq.routing_policy IS NULL
+                  THEN r.id = atq.runtime_id
+              WHEN atq.routing_policy LIKE 'runtime:%'
+                  THEN substr(atq.routing_policy, 9)::uuid = r.id
+              WHEN atq.routing_policy LIKE 'provider:%'
+                  THEN r.provider = substr(atq.routing_policy, 10)
+              ELSE FALSE
+          END
+      )
+    ORDER BY r.id
+    LIMIT 1
+) rt
+WHERE atq.status = 'queued'
   AND EXISTS (
       -- Keep this authorization fence in sync with ClaimAgentTask.
       SELECT 1
       FROM agent a
-      JOIN agent_runtime r ON r.id = atq.runtime_id
+      JOIN agent_runtime r ON r.id = rt.id
       WHERE a.id = atq.agent_id
-        AND a.runtime_id = atq.runtime_id
+        AND (atq.routing_policy IS NOT NULL OR a.runtime_id = atq.runtime_id)
         AND (
             r.visibility = 'public'
             OR (

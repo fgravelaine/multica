@@ -168,11 +168,22 @@ INSERT INTO issue (
     workspace_id, title, description, status, priority,
     assignee_type, assignee_id, creator_type, creator_id,
     parent_issue_id, position, start_date, due_date, number, project_id,
-    stage, last_activity_at, id
+    stage, routing_policy, last_activity_at, id
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-    sqlc.narg('stage'), now(), COALESCE(sqlc.narg('id')::uuid, gen_random_uuid())
+    sqlc.narg('stage'), sqlc.narg('routing_policy'), now(),
+    COALESCE(sqlc.narg('id')::uuid, gen_random_uuid())
 ) RETURNING *;
+
+-- name: SetIssueRoutingPolicy :one
+-- SPIKE: the whole write surface for a routing policy. Deliberately its own
+-- statement rather than a field on UpdateIssue — UpdateIssue carries the
+-- activity-log and status-transition machinery, and a spike has no business
+-- inside it.
+UPDATE issue
+SET routing_policy = sqlc.narg('routing_policy')
+WHERE id = @id
+RETURNING *;
 
 -- name: GetIssueByNumber :one
 SELECT * FROM issue

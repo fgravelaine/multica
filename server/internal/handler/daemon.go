@@ -2264,7 +2264,22 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 	// changing task state, but Agent mutations do not stay locked through HTTP
 	// response assembly. Recheck the freshly loaded Agent here so a rebind or
 	// owner change that committed after the claim cannot reach the daemon.
-	if agent.RuntimeID != task.RuntimeID {
+	//
+	// SPIKE: the FIFTH place that says the agent owns the machine, and the only
+	// one that is not a claim fence — it runs after the task has already been
+	// claimed and dispatched. It was invisible in the code read: the first
+	// routed task claimed correctly, reached the right runtime, and then died
+	// here with "The agent moved to another runtime before this task could
+	// start", which is a true statement about a model where a task's runtime can
+	// only ever be a stale copy of its agent's.
+	//
+	// A routed task is skipped because for it the two ids are SUPPOSED to
+	// differ. Note what is lost by skipping: this check also catches an owner
+	// rebind mid-flight, and a routed task no longer gets that protection. The
+	// honest fix is not a skip — it is for the rebind guard to compare against
+	// what the task asked for rather than against the agent, and that is a
+	// change to what "task identity" means, not a condition.
+	if agent.RuntimeID != task.RuntimeID && !task.RoutingPolicy.Valid {
 		slog.Warn("daemon claim: agent runtime changed before delivery; refusing dispatch",
 			"task_id", uuidToString(task.ID),
 			"agent_id", uuidToString(task.AgentID),
