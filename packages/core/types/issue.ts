@@ -218,3 +218,27 @@ export interface Issue {
   /** Present only on issue detail responses for issues created from a comment. */
   source_context?: IssueSourceContext;
 }
+
+// SPIKE (not upstream): the raised hand.
+//
+// A unit that stops and needs a decision it may not take. The shape is what
+// makes it answerable by someone who does not know the domain: every option
+// carries what it costs to be WRONG on that side, and the raiser names a
+// recommendation. See server/migrations/480_raised_hand.up.sql.
+export interface RaisedHandOption {
+  key: string;
+  label: string;
+  cost: string;
+}
+
+export interface RaisedHand {
+  id: string;
+  issue_id: string;
+  question: string;
+  options: RaisedHandOption[];
+  status: "open" | "answered";
+  recommendation?: string;
+  material?: string;
+  chosen_option?: string;
+  answer?: string;
+}

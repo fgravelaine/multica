@@ -95,6 +95,8 @@ import { ExecutionLogSection } from "./execution-log-section";
 import { QuickActionsSection } from "./quick-actions-section";
 import { PluginPanelSection } from "../../plugins";
 import { PullRequestList } from "./pull-request-list";
+// SPIKE: the raised hand.
+import { RaisedHandCard } from "./raised-hand-card";
 import { useGitHubSettings } from "@multica/core/github";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
@@ -2562,6 +2564,12 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           {pullRequestsOpen && <div className="pl-2"><PullRequestList issueId={id} /></div>}
         </div>
       )}
+
+      {/* SPIKE: an open raised hand. Sits directly above the execution log,
+          because it is the one thing on this issue that is waiting on the
+          reader rather than reporting to them. Renders nothing when no hand is
+          open, which is almost always. */}
+      <RaisedHandCard issueId={id} />
 
       {/* Execution log — active runs + collapsed past runs, each carrying its
           own token spend, with the issue total on the section header.

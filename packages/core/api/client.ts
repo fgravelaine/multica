@@ -221,6 +221,7 @@ import type {
   CreateCommentSubIssueManualRequest,
   CreateCommentSubIssueAgentRequest,
   CreateCommentSubIssueRequest,
+  RaisedHand,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type {
@@ -4370,6 +4371,24 @@ export class ApiClient {
   async deleteGitHubInstallation(workspaceId: string, installationId: string): Promise<void> {
     await this.fetch(`/api/workspaces/${workspaceId}/github/installations/${installationId}`, {
       method: "DELETE",
+    });
+  }
+
+  // SPIKE (not upstream): the raised hand. A unit stopping for a decision it may
+  // not take, as an object with bounded options and the cost of being wrong on
+  // each side — rather than a comment nothing can act on.
+  async listIssueRaisedHands(issueId: string): Promise<{ hands: RaisedHand[] }> {
+    return this.fetch<{ hands: RaisedHand[] }>(`/api/issues/${issueId}/hands`);
+  }
+
+  async answerIssueRaisedHand(
+    issueId: string,
+    chosenOption: string,
+    answer?: string,
+  ): Promise<RaisedHand> {
+    return this.fetch<RaisedHand>(`/api/issues/${issueId}/hands/answer`, {
+      method: "POST",
+      body: JSON.stringify({ chosen_option: chosenOption, answer }),
     });
   }
 
