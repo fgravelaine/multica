@@ -106,6 +106,12 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	"project":                            workspaceDelete,
 	"project_resource":                   workspaceDelete,
 	"quick_action":                       workspaceDelete,
+	// SPIKE: raised_hand. Deleted with the workspace, and it needs no entry in
+	// the deletion graph — the FK to issue is ON DELETE CASCADE, so the rows go
+	// when their issues do. Classifying it is still required, and that is the
+	// point: this manifest is a gate, and it caught the new table on the first
+	// full test run.
+	"raised_hand":                        workspaceDelete,
 	"runtime_profile":                    workspaceDelete,
 	"schema_migrations":                  workspaceDeleteKeep,
 	"seat_capacity_outbox":               workspaceDeleteSettle,

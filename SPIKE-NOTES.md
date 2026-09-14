@@ -329,10 +329,149 @@ routing at all.**
 
 ---
 
+---
+
+# What the spike answered
+
+The question was not whether these could be built. It was whether two models of
+the world fit. Here is the answer, in the order the evidence arrived.
+
+## 1. The premise about waiting was wrong, and usefully so
+
+A queued task whose runtime is offline **waits**, and resumes by itself. Measured
+before anything was changed. `runtime_offline` as a *failure* is a different
+moment — a task already dispatched when its machine drops.
+
+So the gap was never "it fails instead of waiting". It is that **a task cannot
+name a machine**, so it can only ever wait for the one its agent is bound to.
+Narrower than expected, and harder.
+
+## 2. Routing fit. The divergence is reducible — to a column and five edits.
+
+An agent bound to Opencode ran its task on Claude and replied. Nothing else in
+the product noticed.
+
+What it cost: one column on `agent_task_queue`, one on `issue`, and five places
+that each assert the agent owns the machine. Four were findable by reading.
+**The fifth was not**, and it is the one that says something:
+`handler/daemon.go:2267` runs *after* dispatch and fails the task with *"The
+agent moved to another runtime before this task could start."* That is not an
+authorization fence. It is a definition: a task whose runtime differs from its
+agent's is not a routed task, it is a corrupted one.
+
+That is the shape of the whole divergence. Multica is not *preventing*
+task-level routing. It has no concept of it, so a task whose runtime differs
+from its agent's can only be read as damage.
+
+## 3. The one thing that did not fit, exactly located
+
+```sql
+CHECK (runtime_id IS NOT NULL OR completed_at IS NOT NULL)   -- migration 251
+```
+
+An active task must name a machine. So:
+
+- dispatch-time resolution is always a RE-resolution, never a first one;
+- **a task waiting for a machine that has never registered cannot be written at
+  all.**
+
+The second is where the two models genuinely part. In the cycle, a unit carries
+its own delegation boundary and can be written before anyone knows who executes
+it. Here, work cannot exist without an executor already registered. That is not
+one more field. Removing that CHECK is not a change to routing — it changes what
+an active task *is*, and three subsystems (claim, dispatch, delivery-CAS) are
+written against it holding.
+
+**Verdict on the reducibility question: reducible for routing, structural for
+unassigned work.** And the structural half is not where the spike expected to
+find it.
+
+## 4. The raised hand fit almost completely — which is its own answer
+
+Roughly 90% existing machinery. `backlog` already parks. `WillEnqueueRun`
+already re-triggers. `GetLastTaskSession` already resumes — four runs on one
+issue, all on session `31749f1c`, across a CLI answer and a UI answer.
+
+So: **does having it as an object change how it feels to be interrupted, or is a
+comment convention enough?**
+
+A comment convention is not enough, and the reason is narrower than "structure
+is nice". A comment is the question, the answer and the record at the same time,
+so **nothing can be applied to it**. Someone reads it, decides, and then
+separately remembers to un-park the work. Splitting the decision (the object)
+from its delivery (a comment the object writes) is the entire change, and it is
+what makes one click do three things.
+
+The part that actually changes the feel is one field: **the cost of being wrong
+on each side**, required per option. It is what lets the decision be made in
+thirty seconds by someone who does not know the domain. Without it the object is
+a poll and you are back to needing the raiser's knowledge.
+
+## 5. Where the models part on the raised hand, and it is not routing
+
+**There is no recipient.** Every hand goes to the human. The design note says
+this is exactly backwards — most hands should close against a referential or at
+the lead, and only the residue reaches a person, which is the number that
+measures autonomy.
+
+Adding a recipient is not a column. It needs two things to send a hand *to*:
+
+- a **lead** who contests it first. Multica has squads with a leader, so this
+  half has somewhere to land.
+- a **referential** the question might already be answered by. **Multica has no
+  such object at all.** Nothing in the product can be checked against before a
+  human is disturbed.
+
+That is the deeper divergence of the two, and it has nothing to do with
+machines. The cycle's referential — the thing T1 grills against and T5 writes
+back into — has no counterpart here. Which also means Multica cannot express T5:
+there is nowhere for what a run learned to go except the ticket it learned it
+on.
+
+## 6. The product pushed back correctly, once
+
+`TestWorkspaceDeletionManifestCoversPublicSchema` failed on the first full test
+run: `unclassified=[raised_hand]`. Multica requires every new table to carry an
+explicit workspace-teardown decision — delete, detach, keep, settle — before CI
+passes. Adding a table without saying what happens to it when a workspace is
+deleted is not possible here.
+
+Worth recording because it is the opposite of the five fences. Those were the
+model refusing something it had no concept of. This is a gate doing exactly its
+job, catching a spike's new table on the first run and asking one question.
+
+**6738 tests pass**, that classification being the only change any of them
+needed.
+
+## 7. One smaller finding worth keeping
+
+**Multica has exactly one parking status and it is hardwired to one transition.**
+`blocked` exists and is semantically right, but only a change whose *previous*
+status was `backlog` re-enqueues a run. So anything that wants to park and
+resume must borrow `backlog`, conflating "never started" with "stopped
+mid-flight for a decision". Park-and-resume is an edge, not a capability.
+
+## What was NOT done
+
+- No recipient, so no lead-first routing and no two counters.
+- The answer comment is best-effort. If it fails the promotion still fires and a
+  run resumes with the decision missing from its feed. Correct is one
+  transaction over answer + comment + promotion.
+- `material` is free text; the design note hangs an image off each option.
+- Routing has no UI — API and CLI only.
+- No `provider:` fallback ordering, no cost/latency-aware policy. Deliberate:
+  two forms were the minimum to prove dispatch-time resolution differs from an
+  enqueue-time copy.
+
 ## Status
 
 - [x] fork, clone, upstream remote
 - [x] running locally (Docker, on the localenv stack)
 - [x] baseline measured: queued work already waits
 - [x] routing spike — works; five fences; one wall left standing
-- [x] raised hand spike — works; borrowed one hardcoded edge; no recipient
+- [x] raised hand spike — works end to end from CLI and UI
+- [x] 6738 tests passing
+- [x] report
+
+Whether any of this is worth proposing upstream is a decision for later and was
+not part of this session.
