@@ -1207,6 +1207,24 @@ type QuickAction struct {
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
+type RaisedHand struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	IssueID        pgtype.UUID        `json:"issue_id"`
+	AgentID        pgtype.UUID        `json:"agent_id"`
+	TaskID         pgtype.UUID        `json:"task_id"`
+	Question       string             `json:"question"`
+	Options        []byte             `json:"options"`
+	Recommendation pgtype.Text        `json:"recommendation"`
+	Material       pgtype.Text        `json:"material"`
+	Status         string             `json:"status"`
+	ChosenOption   pgtype.Text        `json:"chosen_option"`
+	Answer         pgtype.Text        `json:"answer"`
+	AnsweredBy     pgtype.UUID        `json:"answered_by"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	AnsweredAt     pgtype.Timestamptz `json:"answered_at"`
+}
+
 type RuntimeProfile struct {
 	ID             pgtype.UUID        `json:"id"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`

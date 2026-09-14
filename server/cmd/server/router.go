@@ -1904,6 +1904,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// field on UpdateIssue, so the spike stays clear of the
 					// activity-log and status-transition machinery.
 					r.Put("/routing-policy", h.SetIssueRoutingPolicy)
+					// SPIKE: the raised hand. Raise is called by an agent from
+					// inside a run; answer is called by whoever decides.
+					r.Get("/hands", h.ListHands)
+					r.Post("/hands", h.RaiseHand)
+					r.Post("/hands/answer", h.AnswerHand)
 					r.Post("/move", h.MoveIssue)
 					r.Delete("/", h.DeleteIssue)
 					r.Post("/comments/trigger-preview", h.PreviewCommentTriggers)

@@ -242,10 +242,97 @@ does not exist yet, which is the CHECK again.
 
 ---
 
+---
+
+## Spike 2 — the raised hand. It works, and it resisted almost nothing.
+
+`raised_hand` is a table; `multica hand raise | list | answer` is the surface.
+An agent raised one from inside a real run, the unit parked, a human picked an
+option, the unit came back, and the agent continued **in the same session**.
+
+```
+task     | status    | session
+01a0a1ad | completed | 31749f1c-936     <- raised the hand, stopped
+01a0a1b4 | completed | 31749f1c-936     <- resumed after the answer
+```
+
+Same session id. That continuity was not written: the re-triggered task is the
+same `(agent_id, issue_id)` pair, so `GetLastTaskSession` resumed the agent's
+conversation on its own. The agent's own words on resume: *"The hand came back
+as option b — build a PlaceCard component in the design system — and that is
+the recorded decision."*
+
+### What makes it an object rather than a comment
+
+The schema refuses a hand that is not answerable:
+
+- **two to six options**, checked in SQL and in the handler — "a raised hand
+  with one option is not a question";
+- **every option needs a `cost`** — what it costs to be *wrong on that side*,
+  not what the option does. This is the field that lets someone decide in
+  thirty seconds without knowing the domain, and the API rejects a hand without
+  it;
+- **a recommendation must be one of the option keys** — a raiser that stops
+  without a pick has handed over its judgement along with the decision;
+- **one open hand per issue**, a partial unique index. A second is 409;
+- **answering cannot pick outside the set**. If none of the options is right,
+  the question was wrong, and the repair is a new hand.
+
+All five verified against the running instance.
+
+### Two things it did NOT need to add, and that is the result
+
+- **No new status.** `backlog` already parks. Answering moves the issue to
+  `todo` and the product's own `WillEnqueueRun` re-triggers the agent.
+- **No resume mechanism.** Session resume already existed.
+
+So the raised hand is roughly 90% existing machinery with an object in front of
+it. **The gap was never mechanism — it was that nothing could be *applied*.**
+A comment holds the question, the answer and the record all at once, so nothing
+can act on it; somebody reads it, decides, and then separately remembers to
+un-park the work. Splitting the decision (the object) from its delivery (a
+comment the object writes) is the entire change.
+
+### Where it did resist
+
+**One parking status, and it is hardwired to one transition.** `blocked` is the
+semantically correct place to park, and it cannot be used:
+`service/issue_trigger.go` only re-enqueues on a status change whose PREVIOUS
+status was `backlog`. Park in `blocked` and the answer strands the unit — it
+moves to `todo` and nothing picks it up.
+
+So "park and resume" is not a capability in this model. It is one hardcoded
+edge, `backlog → anything`, and anything that wants to park has to borrow it.
+The cost is conflating "never started" with "stopped mid-flight for a
+decision"; only the raised-hand object tells those apart.
+
+**The answer comment is best-effort, and that is a real hole.** The decision is
+on the hand, but the agent reads comments. If the comment write fails, the
+promotion still fires and a run resumes with no answer in its feed. Correct
+would be one transaction over answer + comment + promotion. Left as is, and
+written down rather than papered over.
+
+### The gap that matters most: there is no recipient
+
+Every hand here goes to the human. The design note is emphatic that this is
+backwards — *"L'humain est le destinataire le plus rare — la plupart des mains
+levées se referment contre un référentiel ou chez le lead"* — and that the two
+need separate counters, because the second is what measures autonomy.
+
+That is not a missing column. A recipient needs somewhere for the hand to go
+that is not a person: a lead who can contest it first, and a referential the
+answer might already be in. Multica has squads with a leader, so the lead half
+has somewhere to land. The referential half has nothing to land on — there is
+no object in the product that a question can be checked against before a human
+sees it. **That is the deeper divergence of the two, and it is not about
+routing at all.**
+
+---
+
 ## Status
 
 - [x] fork, clone, upstream remote
 - [x] running locally (Docker, on the localenv stack)
 - [x] baseline measured: queued work already waits
 - [x] routing spike — works; five fences; one wall left standing
-- [ ] raised hand spike
+- [x] raised hand spike — works; borrowed one hardcoded edge; no recipient
