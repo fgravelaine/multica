@@ -77,16 +77,22 @@ export function MissionView({ issueId }: { issueId: string }) {
     return <p className="p-6 text-caption text-muted-foreground">This issue has no mission to show.</p>;
   }
 
+  // The page owns its scroll. SidebarInset is `h-svh overflow-hidden`, so a
+  // page that does not carry its own scroll container is simply cut off at the
+  // fold — which is what happened here: the tree was unreachable. Same shape
+  // the settings pages use.
   return (
-    <div className="mx-auto w-full max-w-5xl px-6 py-6">
-      <MissionHeader data={data} issueHref={paths.issueDetail(data.root.id)} />
-      <WaitingSection data={data} paths={paths} />
-      <WithLeadSection data={data} paths={paths} />
-      <StalledSection data={data} paths={paths} />
-      <ReferentialSection data={data} paths={paths} />
-      <LeadContestSection data={data} />
-      <StageSection data={data} />
-      <TreeSection data={data} paths={paths} />
+    <div className="h-full min-h-0 overflow-y-auto overscroll-contain">
+      <div className="mx-auto w-full max-w-5xl px-6 py-6">
+        <MissionHeader data={data} issueHref={paths.issueDetail(data.root.id)} />
+        <WaitingSection data={data} paths={paths} />
+        <WithLeadSection data={data} paths={paths} />
+        <StalledSection data={data} paths={paths} />
+        <ReferentialSection data={data} paths={paths} />
+        <LeadContestSection data={data} />
+        <StageSection data={data} />
+        <TreeSection data={data} paths={paths} />
+      </div>
     </div>
   );
 }
