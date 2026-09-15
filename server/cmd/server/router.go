@@ -1879,6 +1879,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Get("/api/assignee-frequency", h.GetAssigneeFrequency)
 
 			// Issues
+			// SPIKE: the referential vocabulary a raised hand names.
+			r.Get("/api/referentials", h.ListReferentials)
+
 			r.Route("/api/issues", func(r chi.Router) {
 				r.Get("/limit-usage", h.GetIssueLimitUsage)
 				r.Post("/table/groups", h.ListIssueTableGroups)

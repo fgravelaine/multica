@@ -195,6 +195,7 @@ SELECT
     h.recommendation,
     h.created_at,
     h.agent_id,
+    h.referential_key,
     a.name AS agent_name
 FROM raised_hand h
 LEFT JOIN agent a ON a.id = h.agent_id
@@ -211,16 +212,14 @@ type ListMissionOpenHandsRow struct {
 	Recommendation pgtype.Text        `json:"recommendation"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	AgentID        pgtype.UUID        `json:"agent_id"`
+	ReferentialKey pgtype.Text        `json:"referential_key"`
 	AgentName      pgtype.Text        `json:"agent_name"`
 }
 
 // Open raised hands anywhere in the tree, with the agent that raised each.
 //
-// The agent is joined for the referential grouping: until a hand carries a
-// referential of its own, the raiser's role is the closest honest stand-in for
-// which body of knowledge the question interrogates. See missionReferential in
-// internal/handler/mission.go — that function is the single place to change
-// when a real field lands.
+// referential_key is what the grouping reads. The agent is still joined, but
+// only to name the raiser on the row — it is no longer the grouping key.
 func (q *Queries) ListMissionOpenHands(ctx context.Context, issueIds []pgtype.UUID) ([]ListMissionOpenHandsRow, error) {
 	rows, err := q.db.Query(ctx, listMissionOpenHands, issueIds)
 	if err != nil {
@@ -238,6 +237,7 @@ func (q *Queries) ListMissionOpenHands(ctx context.Context, issueIds []pgtype.UU
 			&i.Recommendation,
 			&i.CreatedAt,
 			&i.AgentID,
+			&i.ReferentialKey,
 			&i.AgentName,
 		); err != nil {
 			return nil, err

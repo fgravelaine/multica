@@ -153,6 +153,7 @@ type MissionHand struct {
 	Recommendation string       `json:"recommendation,omitempty"`
 	AgentID        string       `json:"agent_id,omitempty"`
 	AgentName      string       `json:"agent_name,omitempty"`
+	Referential    string       `json:"referential,omitempty"`
 	CreatedAt      time.Time    `json:"created_at"`
 }
 
@@ -198,32 +199,40 @@ type MissionResponse struct {
 
 // missionReferentialField names the hand field the grouping reads.
 //
-// THIS IS THE SINGLE PLACE TO CHANGE when a real referential lands on the
-// raised hand: point missionReferential at the new field and set
-// referentialStandIn to false. Nothing else in the server or the client knows
-// how the grouping is derived.
-const missionReferentialField = "agent_id"
+// It was "agent_id" while the grouping was a proxy for the body of knowledge a
+// question interrogates. Migration 481 gave the raised hand a real
+// referential_key, validated against a per-workspace catalog, so the grouping
+// now counts the thing itself.
+const missionReferentialField = "referential_key"
 
-// missionReferentialStandIn is true while the grouping is a proxy.
-const missionReferentialStandIn = true
+// missionReferentialStandIn records whether the grouping is still a proxy. It
+// is not: the field is real and every new hand is refused without it.
+const missionReferentialStandIn = false
+
+// missionReferentialUnrecorded is the bucket for hands raised before the field
+// existed.
+//
+// Deliberately NOT folded into the `unclassified` catalog key, which means "the
+// raiser could not tell which body of knowledge failed it". "Nobody was asked"
+// and "the raiser could not tell" are different facts, and the second one is a
+// finding about the raiser while the first is only an artefact of when the
+// column landed.
+const missionReferentialUnrecorded = "unrecorded"
 
 // missionReferential returns the referential a hand interrogates.
 //
-// A raised hand does not carry one yet. The closest honest proxy is the agent
-// that raised it: agents are roles here — a designer's questions land on the
-// design system, a backend agent's on the API contract — so the raiser's
-// identity approximates the body of knowledge that failed to answer. It is a
-// proxy and the response says so; an agent that spans two referentials, or two
-// agents sharing one, both defeat it.
-func missionReferential(hand MissionHand) (key, label string) {
-	if hand.AgentID == "" {
-		return "unattributed", "Unattributed"
+// labels maps catalog keys to display names. A key the catalog no longer has —
+// archived, renamed, deleted — resolves to itself rather than disappearing:
+// raised_hand.referential_key is deliberately not an FK so history survives a
+// change to the vocabulary, and losing the row here would undo that.
+func missionReferential(hand MissionHand, labels map[string]string) (key, label string) {
+	if hand.Referential == "" {
+		return missionReferentialUnrecorded, "Not recorded (raised before referentials)"
 	}
-	label = hand.AgentName
-	if label == "" {
-		label = "Agent " + hand.AgentID
+	if name, ok := labels[hand.Referential]; ok && name != "" {
+		return hand.Referential, name
 	}
-	return hand.AgentID, label
+	return hand.Referential, hand.Referential
 }
 
 // GetMission returns the tree under one issue, what is parked in it, and which
@@ -285,6 +294,24 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A sixth query, and only when there is something to label. A mission with
+	// no open hand — the common case — still costs five. The budget that
+	// matters is "fixed, never per node", not the exact number.
+	referentialLabels := map[string]string{}
+	if len(hands) > 0 {
+		catalog, cerr := h.Queries.ListReferentials(r.Context(), db.ListReferentialsParams{
+			WorkspaceID:     root.WorkspaceID,
+			IncludeArchived: true,
+		})
+		if cerr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load referentials")
+			return
+		}
+		for _, entry := range catalog {
+			referentialLabels[entry.Key] = entry.Name
+		}
+	}
+
 	prefix := h.getIssuePrefix(r.Context(), root.WorkspaceID)
 	resolver := issuestatus.NewResolver(root.WorkspaceID)
 	now := time.Now().UTC()
@@ -321,6 +348,9 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 		}
 		if row.AgentName.Valid {
 			hand.AgentName = row.AgentName.String
+		}
+		if row.ReferentialKey.Valid {
+			hand.Referential = row.ReferentialKey.String
 		}
 		// One open hand per issue is enforced by a partial unique index, so the
 		// last write here cannot overwrite a second live question.
@@ -437,7 +467,7 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 		Stages:             stages,
 		Waiting:            waiting,
 		Stalled:            stalled,
-		Referentials:       missionReferentials(allHands),
+		Referentials:       missionReferentials(allHands, referentialLabels),
 		ReferentialStandIn: missionReferentialStandIn,
 		ReferentialField:   missionReferentialField,
 		UnstagedIgnored:    unstagedIgnored,
@@ -632,11 +662,11 @@ func missionStages(nodes []MissionNode, rootID string) ([]MissionStage, []string
 }
 
 // missionReferentials groups open hands, largest group first.
-func missionReferentials(hands []MissionHand) []MissionReferential {
+func missionReferentials(hands []MissionHand, labels map[string]string) []MissionReferential {
 	byKey := map[string]*MissionReferential{}
 	order := make([]string, 0)
 	for _, hand := range hands {
-		key, label := missionReferential(hand)
+		key, label := missionReferential(hand, labels)
 		entry, ok := byKey[key]
 		if !ok {
 			entry = &MissionReferential{Key: key, Label: label, Hands: make([]MissionHand, 0, 2)}

@@ -87,11 +87,8 @@ GROUP BY atq.issue_id;
 -- name: ListMissionOpenHands :many
 -- Open raised hands anywhere in the tree, with the agent that raised each.
 --
--- The agent is joined for the referential grouping: until a hand carries a
--- referential of its own, the raiser's role is the closest honest stand-in for
--- which body of knowledge the question interrogates. See missionReferential in
--- internal/handler/mission.go — that function is the single place to change
--- when a real field lands.
+-- referential_key is what the grouping reads. The agent is still joined, but
+-- only to name the raiser on the row — it is no longer the grouping key.
 SELECT
     h.id,
     h.issue_id,
@@ -100,6 +97,7 @@ SELECT
     h.recommendation,
     h.created_at,
     h.agent_id,
+    h.referential_key,
     a.name AS agent_name
 FROM raised_hand h
 LEFT JOIN agent a ON a.id = h.agent_id

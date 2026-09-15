@@ -276,3 +276,70 @@ func TestMissionStalled_SkipsStartedAndAlreadyWaiting(t *testing.T) {
 		t.Errorf("stalled = %+v, want none: one is in flight and one is already waiting", out)
 	}
 }
+
+// missionReferential now reads a real catalog key. The cases that matter are
+// the two ways a key can fail to resolve, because the diagnostic is a count and
+// a silently dropped hand makes a referential look healthier than it is.
+
+func TestMissionReferential_ResolvesCatalogName(t *testing.T) {
+	labels := map[string]string{"design_system": "Design system"}
+	key, label := missionReferential(MissionHand{Referential: "design_system"}, labels)
+	if key != "design_system" || label != "Design system" {
+		t.Errorf("got (%q, %q), want (design_system, Design system)", key, label)
+	}
+}
+
+func TestMissionReferential_UnknownKeyResolvesToItself(t *testing.T) {
+	// raised_hand.referential_key is deliberately not an FK so a hand outlives
+	// a renamed or archived catalog row. Losing the hand here would undo that.
+	key, label := missionReferential(MissionHand{Referential: "retired_thing"}, map[string]string{})
+	if key != "retired_thing" || label != "retired_thing" {
+		t.Errorf("got (%q, %q), want the key echoed back", key, label)
+	}
+}
+
+func TestMissionReferential_UnrecordedIsNotUnclassified(t *testing.T) {
+	// "raised before the column existed" and "the raiser could not tell" are
+	// different facts. The second is a finding about the raiser; folding the
+	// first into it would invent one.
+	key, _ := missionReferential(MissionHand{}, map[string]string{})
+	if key != missionReferentialUnrecorded {
+		t.Errorf("key = %q, want %q", key, missionReferentialUnrecorded)
+	}
+	if key == "unclassified" {
+		t.Error("an unrecorded hand must not be counted as unclassified")
+	}
+}
+
+func TestMissionReferentials_CountsAndOrdersByTallestBar(t *testing.T) {
+	labels := map[string]string{"design_system": "Design system", "api_contract": "API contract"}
+	hands := []MissionHand{
+		{ID: "1", Referential: "api_contract"},
+		{ID: "2", Referential: "design_system"},
+		{ID: "3", Referential: "design_system"},
+		{ID: "4", Referential: "design_system"},
+	}
+	out := missionReferentials(hands, labels)
+	if len(out) != 2 {
+		t.Fatalf("groups = %d, want 2", len(out))
+	}
+	// The whole diagnostic is "which referential cannot answer on its own", so
+	// the tallest bar leads.
+	if out[0].Key != "design_system" || out[0].Count != 3 {
+		t.Errorf("first group = %s/%d, want design_system/3", out[0].Key, out[0].Count)
+	}
+	if out[1].Key != "api_contract" || out[1].Count != 1 {
+		t.Errorf("second group = %s/%d, want api_contract/1", out[1].Key, out[1].Count)
+	}
+}
+
+func TestMissionReferential_StandInFlagIsOff(t *testing.T) {
+	// The flag is the client's only way to know whether it is looking at a real
+	// grouping or a proxy. It must track the field, not be forgotten next to it.
+	if missionReferentialStandIn {
+		t.Error("the grouping reads a real referential_key; the stand-in flag must be false")
+	}
+	if missionReferentialField != "referential_key" {
+		t.Errorf("field = %q, want referential_key", missionReferentialField)
+	}
+}

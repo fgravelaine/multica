@@ -68,6 +68,8 @@ export interface MissionHand {
   recommendation?: string;
   agent_id?: string;
   agent_name?: string;
+  /** Catalog key of the body of knowledge this question interrogates. */
+  referential?: string;
   created_at: string;
 }
 
@@ -108,8 +110,9 @@ export interface MissionResponse {
   stalled: MissionWaitingUnit[];
   referentials: MissionReferential[];
   /**
-   * True while hands carry no referential of their own and the grouping falls
-   * back to the raising agent. The UI must say so.
+   * False since the raised hand carries a real referential_key. Kept on the
+   * wire so a client can tell a genuine grouping from a proxy without knowing
+   * which server version it is talking to.
    */
   referential_stand_in: boolean;
   referential_field: string;

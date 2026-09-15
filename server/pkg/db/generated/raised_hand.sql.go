@@ -19,7 +19,7 @@ SET status        = 'answered',
     answered_by   = $3,
     answered_at   = now()
 WHERE id = $4 AND status = 'open'
-RETURNING id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at
+RETURNING id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at, referential_key
 `
 
 type AnswerRaisedHandParams struct {
@@ -56,12 +56,13 @@ func (q *Queries) AnswerRaisedHand(ctx context.Context, arg AnswerRaisedHandPara
 		&i.AnsweredBy,
 		&i.CreatedAt,
 		&i.AnsweredAt,
+		&i.ReferentialKey,
 	)
 	return i, err
 }
 
 const getOpenHandForIssue = `-- name: GetOpenHandForIssue :one
-SELECT id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at FROM raised_hand
+SELECT id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at, referential_key FROM raised_hand
 WHERE issue_id = $1 AND status = 'open'
 `
 
@@ -84,12 +85,13 @@ func (q *Queries) GetOpenHandForIssue(ctx context.Context, issueID pgtype.UUID) 
 		&i.AnsweredBy,
 		&i.CreatedAt,
 		&i.AnsweredAt,
+		&i.ReferentialKey,
 	)
 	return i, err
 }
 
 const getRaisedHand = `-- name: GetRaisedHand :one
-SELECT id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at FROM raised_hand WHERE id = $1
+SELECT id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at, referential_key FROM raised_hand WHERE id = $1
 `
 
 func (q *Queries) GetRaisedHand(ctx context.Context, id pgtype.UUID) (RaisedHand, error) {
@@ -111,12 +113,13 @@ func (q *Queries) GetRaisedHand(ctx context.Context, id pgtype.UUID) (RaisedHand
 		&i.AnsweredBy,
 		&i.CreatedAt,
 		&i.AnsweredAt,
+		&i.ReferentialKey,
 	)
 	return i, err
 }
 
 const listHandsForIssue = `-- name: ListHandsForIssue :many
-SELECT id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at FROM raised_hand
+SELECT id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at, referential_key FROM raised_hand
 WHERE issue_id = $1
 ORDER BY created_at DESC
 `
@@ -146,6 +149,7 @@ func (q *Queries) ListHandsForIssue(ctx context.Context, issueID pgtype.UUID) ([
 			&i.AnsweredBy,
 			&i.CreatedAt,
 			&i.AnsweredAt,
+			&i.ReferentialKey,
 		); err != nil {
 			return nil, err
 		}
@@ -158,7 +162,7 @@ func (q *Queries) ListHandsForIssue(ctx context.Context, issueID pgtype.UUID) ([
 }
 
 const listOpenHandsInWorkspace = `-- name: ListOpenHandsInWorkspace :many
-SELECT h.id, h.workspace_id, h.issue_id, h.agent_id, h.task_id, h.question, h.options, h.recommendation, h.material, h.status, h.chosen_option, h.answer, h.answered_by, h.created_at, h.answered_at, i.number AS issue_number, i.title AS issue_title
+SELECT h.id, h.workspace_id, h.issue_id, h.agent_id, h.task_id, h.question, h.options, h.recommendation, h.material, h.status, h.chosen_option, h.answer, h.answered_by, h.created_at, h.answered_at, h.referential_key, i.number AS issue_number, i.title AS issue_title
 FROM raised_hand h
 JOIN issue i ON i.id = h.issue_id
 WHERE h.workspace_id = $1 AND h.status = 'open'
@@ -181,6 +185,7 @@ type ListOpenHandsInWorkspaceRow struct {
 	AnsweredBy     pgtype.UUID        `json:"answered_by"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	AnsweredAt     pgtype.Timestamptz `json:"answered_at"`
+	ReferentialKey pgtype.Text        `json:"referential_key"`
 	IssueNumber    int32              `json:"issue_number"`
 	IssueTitle     string             `json:"issue_title"`
 }
@@ -210,6 +215,7 @@ func (q *Queries) ListOpenHandsInWorkspace(ctx context.Context, workspaceID pgty
 			&i.AnsweredBy,
 			&i.CreatedAt,
 			&i.AnsweredAt,
+			&i.ReferentialKey,
 			&i.IssueNumber,
 			&i.IssueTitle,
 		); err != nil {
@@ -227,12 +233,13 @@ const raiseHand = `-- name: RaiseHand :one
 
 INSERT INTO raised_hand (
     workspace_id, issue_id, agent_id, task_id,
-    question, options, recommendation, material
+    question, options, recommendation, material, referential_key
 ) VALUES (
     $1, $2, $3, $4,
-    $5, $6, $7, $8
+    $5, $6, $7, $8,
+    $9
 )
-RETURNING id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at
+RETURNING id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at, referential_key
 `
 
 type RaiseHandParams struct {
@@ -244,6 +251,7 @@ type RaiseHandParams struct {
 	Options        []byte      `json:"options"`
 	Recommendation pgtype.Text `json:"recommendation"`
 	Material       pgtype.Text `json:"material"`
+	ReferentialKey pgtype.Text `json:"referential_key"`
 }
 
 // SPIKE (not upstream): queries for the raised hand.
@@ -258,6 +266,7 @@ func (q *Queries) RaiseHand(ctx context.Context, arg RaiseHandParams) (RaisedHan
 		arg.Options,
 		arg.Recommendation,
 		arg.Material,
+		arg.ReferentialKey,
 	)
 	var i RaisedHand
 	err := row.Scan(
@@ -276,6 +285,7 @@ func (q *Queries) RaiseHand(ctx context.Context, arg RaiseHandParams) (RaisedHan
 		&i.AnsweredBy,
 		&i.CreatedAt,
 		&i.AnsweredAt,
+		&i.ReferentialKey,
 	)
 	return i, err
 }

@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -77,6 +78,13 @@ func (h *Handler) RaiseHand(w http.ResponseWriter, r *http.Request) {
 		Recommendation string       `json:"recommendation"`
 		Material       string       `json:"material"`
 		TaskID         string       `json:"task_id"`
+		// Referential is the body of knowledge that failed to answer. Required,
+		// for the same reason every option needs a cost: the mission view's
+		// diagnostic is a COUNT, and a hand that does not say what it
+		// interrogates contributes nothing to it. `unclassified` is a real key
+		// for a raiser that genuinely cannot tell — which is a finding rather
+		// than a gap, and countable as such.
+		Referential string `json:"referential"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -118,6 +126,30 @@ func (h *Handler) RaiseHand(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The catalog is seeded lazily, exactly like issue_status: a workspace that
+	// has never raised a hand gets its built-ins on the first attempt rather
+	// than needing a provisioning step.
+	if err := h.Queries.SeedReferentials(r.Context(), issue.WorkspaceID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to seed referentials")
+		return
+	}
+	referential := strings.TrimSpace(req.Referential)
+	if referential == "" {
+		writeError(w, http.StatusBadRequest,
+			"referential is required: which body of knowledge failed to answer this. Use `multica referential list` to see the keys, or `unclassified` if you cannot tell")
+		return
+	}
+	if _, rerr := h.Queries.GetReferentialByKey(r.Context(), db.GetReferentialByKeyParams{
+		WorkspaceID: issue.WorkspaceID,
+		Key:         referential,
+	}); rerr != nil {
+		// Free text here would make the count meaningless — "design system",
+		// "design-system" and "Design System" would be three referentials.
+		writeError(w, http.StatusBadRequest,
+			"unknown referential "+strconv.Quote(referential)+" — run `multica referential list` for the keys in this workspace")
+		return
+	}
+
 	optionsJSON, err := json.Marshal(req.Options)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to encode options")
@@ -138,6 +170,7 @@ func (h *Handler) RaiseHand(w http.ResponseWriter, r *http.Request) {
 		Options:        optionsJSON,
 		Recommendation: pgtype.Text{String: req.Recommendation, Valid: req.Recommendation != ""},
 		Material:       pgtype.Text{String: req.Material, Valid: req.Material != ""},
+		ReferentialKey: pgtype.Text{String: referential, Valid: true},
 	})
 	if err != nil {
 		// The partial unique index on (issue_id) WHERE status = 'open' is what
@@ -307,6 +340,9 @@ func renderHand(hand db.RaisedHand) map[string]any {
 	}
 	if hand.Material.Valid {
 		out["material"] = hand.Material.String
+	}
+	if hand.ReferentialKey.Valid {
+		out["referential"] = hand.ReferentialKey.String
 	}
 	if hand.ChosenOption.Valid {
 		out["chosen_option"] = hand.ChosenOption.String

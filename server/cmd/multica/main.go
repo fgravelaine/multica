@@ -81,8 +81,9 @@ func init() {
 	rootCmd.AddCommand(repoCmd)
 	rootCmd.AddCommand(skillCmd)
 	rootCmd.AddCommand(squadCmd)
-	// SPIKE: the raised hand.
+	// SPIKE: the raised hand, and the vocabulary it names.
 	rootCmd.AddCommand(handCmd)
+	rootCmd.AddCommand(referentialCmd)
 	rootCmd.AddCommand(chatCmd)
 	rootCmd.AddCommand(daemonCmd)
 	rootCmd.AddCommand(runtimeCmd)

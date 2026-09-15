@@ -1223,6 +1223,20 @@ type RaisedHand struct {
 	AnsweredBy     pgtype.UUID        `json:"answered_by"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	AnsweredAt     pgtype.Timestamptz `json:"answered_at"`
+	ReferentialKey pgtype.Text        `json:"referential_key"`
+}
+
+type Referential struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	Key         string             `json:"key"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	IsSystem    bool               `json:"is_system"`
+	Position    float64            `json:"position"`
+	ArchivedAt  pgtype.Timestamptz `json:"archived_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
 type RuntimeProfile struct {

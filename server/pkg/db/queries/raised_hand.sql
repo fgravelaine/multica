@@ -4,10 +4,11 @@
 -- name: RaiseHand :one
 INSERT INTO raised_hand (
     workspace_id, issue_id, agent_id, task_id,
-    question, options, recommendation, material
+    question, options, recommendation, material, referential_key
 ) VALUES (
     @workspace_id, @issue_id, sqlc.narg(agent_id), sqlc.narg(task_id),
-    @question, @options, sqlc.narg(recommendation), sqlc.narg(material)
+    @question, @options, sqlc.narg(recommendation), sqlc.narg(material),
+    sqlc.narg(referential_key)
 )
 RETURNING *;
 

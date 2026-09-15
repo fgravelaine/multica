@@ -314,16 +314,22 @@ function ReferentialSection({
         <ShieldQuestion className="size-3.5" />
         Which referential cannot answer
       </h2>
-      {/* Said plainly and never hidden. A diagnostic that looks authoritative
-          while grouping by a proxy is worse than no diagnostic at all. */}
+      {/* The banner stays in the code, not because it renders today but because
+          the honesty rule it enforces outlives this particular field: a
+          grouping by proxy must say so, and a server that ever falls back to
+          one will set the flag again. */}
       {data.referential_stand_in ? (
         <p className="mb-2 rounded-md border border-dashed bg-muted/30 px-3 py-2 text-caption text-muted-foreground">
-          <span className="font-medium text-foreground">Stand-in.</span> A raised hand carries no
-          referential yet, so these are grouped by the agent that raised them (
-          <code className="font-mono">{data.referential_field}</code>) — a proxy for the body of
+          <span className="font-medium text-foreground">Stand-in.</span> These are grouped by{" "}
+          <code className="font-mono">{data.referential_field}</code> — a proxy for the body of
           knowledge the question interrogates, not the thing itself.
         </p>
-      ) : null}
+      ) : (
+        <p className="mb-2 text-caption text-muted-foreground">
+          Each raised hand names the body of knowledge that failed to answer it. A tall bar is a
+          referential too thin to answer on its own.
+        </p>
+      )}
       <ul className="space-y-1.5">
         {data.referentials.map((group) => (
           <li key={group.key} className="flex items-center gap-3">

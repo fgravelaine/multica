@@ -37,9 +37,16 @@ var handRaiseCmd = &cobra.Command{
 		"That is what lets someone who does not know the domain decide in thirty\n" +
 		"seconds, and it is why the option syntax requires three parts:\n\n" +
 		"  --option 'key|label|cost of being wrong'\n\n" +
+		"--referential names the body of knowledge that failed to answer you —\n" +
+		"the design system, the API contract, the architecture. It is required:\n" +
+		"a pile of hands on one referential is what says that referential is too\n" +
+		"thin to answer on its own, and a hand that does not name one cannot\n" +
+		"contribute to that. Run `multica referential list` for the keys, or use\n" +
+		"`unclassified` when you genuinely cannot tell which one failed you.\n\n" +
 		"Example:\n" +
 		"  multica hand raise SPIK-7 \\\n" +
 		"    --question 'Is a plan shareable with travel companions?' \\\n" +
+		"    --referential product_direction \\\n" +
 		"    --option 'a|Solo plan|Three weeks sooner, but the collaborative door closes for a year' \\\n" +
 		"    --option 'b|Shared from the start|The model carries the invitation; complexity paid even if nobody shares' \\\n" +
 		"    --recommend a",
@@ -77,10 +84,16 @@ func runHandRaise(cmd *cobra.Command, args []string) error {
 
 	recommend, _ := cmd.Flags().GetString("recommend")
 	material, _ := cmd.Flags().GetString("material")
+	referential, _ := cmd.Flags().GetString("referential")
+	if strings.TrimSpace(referential) == "" {
+		return fmt.Errorf("--referential is required: which body of knowledge failed to answer this.\n" +
+			"Run `multica referential list` for the keys, or use `unclassified` if you cannot tell")
+	}
 
 	body := map[string]any{
-		"question": question,
-		"options":  options,
+		"question":    question,
+		"options":     options,
+		"referential": referential,
 	}
 	if recommend != "" {
 		body["recommendation"] = recommend
@@ -142,6 +155,9 @@ func runHandList(cmd *cobra.Command, args []string) error {
 
 	for _, hand := range resp.Hands {
 		fmt.Printf("\n%s  [%s]\n", strVal(hand, "question"), strVal(hand, "status"))
+		if ref := strVal(hand, "referential"); ref != "" {
+			fmt.Printf("referential: %s\n", ref)
+		}
 		if rec := strVal(hand, "recommendation"); rec != "" {
 			fmt.Printf("recommends: %s\n", rec)
 		}
@@ -209,6 +225,7 @@ func runHandAnswer(cmd *cobra.Command, args []string) error {
 func init() {
 	handRaiseCmd.Flags().String("question", "", "What is being asked, in one line (required)")
 	handRaiseCmd.Flags().StringArray("option", nil, "Repeatable: 'key|label|cost of being wrong' (at least two)")
+	handRaiseCmd.Flags().String("referential", "", "Which body of knowledge failed to answer (required; see `multica referential list`)")
 	handRaiseCmd.Flags().String("recommend", "", "Option key the raiser recommends")
 	handRaiseCmd.Flags().String("material", "", "Anything the decider needs to look at")
 	handRaiseCmd.Flags().String("output", "table", "Output format: table or json")
