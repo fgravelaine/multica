@@ -43,6 +43,44 @@ export interface MissionNode {
   waiting_below: boolean;
   /** Absent when the issue has never had a metered run. */
   usage?: MissionNodeUsage;
+  /**
+   * The units standing between this one and its turn. Absent when nothing is.
+   *
+   * Multica records no "blocked by" LINK — issue_dependency is a dead table
+   * with no API and no writer. Its answer to "the email needs the design
+   * validated" is the stage barrier, so these are the frontier stage's open
+   * units: an ordering, named.
+   */
+  blocked_by?: MissionBlocker[];
+  /** Absent when the issue has never run. */
+  last_run?: MissionNodeRun;
+  /** When the issue entered its current status. */
+  status_since?: string;
+  /** False when `status_since` is issue.updated_at rather than a transition. */
+  status_since_exact: boolean;
+}
+
+/** One unit standing between another and its turn. */
+export interface MissionBlocker {
+  issue_id: string;
+  identifier: string;
+  title: string;
+  status: string;
+  stage?: number;
+  /** Why it blocks. `stage_barrier` is the only relation the product records. */
+  relation: string;
+}
+
+/** The latest run of one unit. Every field is a column the product writes. */
+export interface MissionNodeRun {
+  task_id: string;
+  status: string;
+  failure_reason?: string;
+  wait_reason?: string;
+  dispatched_at?: string;
+  started_at?: string;
+  completed_at?: string;
+  created_at: string;
 }
 
 export interface MissionStage {

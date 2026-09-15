@@ -91,6 +91,131 @@ type MissionNode struct {
 	// cost_usd_ticks is the same unit every other usage endpoint emits; the
 	// view neither converts nor recomputes it.
 	Usage *MissionNodeUsage `json:"usage,omitempty"`
+
+	// BlockedBy names the units this one is actually waiting on, when the thing
+	// holding it is another unit rather than a person.
+	//
+	// Multica records no "X is blocked by Y" link. issue_dependency exists in
+	// the schema with a blocks/blocked_by type, and is dead: no query, no API,
+	// no client type, no UI that writes one, and no rows. The product's answer
+	// to "the email needs the design validated" is the STAGE BARRIER — the
+	// design in a lower stage, the email in a higher one — which is an ordering
+	// rather than a link, and so cannot name a blocker across two parents or
+	// two missions.
+	//
+	// So this is the barrier, named. A unit above the frontier is waiting on
+	// exactly the frontier stage's open units, and those are the units to go
+	// look at. Nothing here is invented: every entry is a sibling the product
+	// already put in a lower stage and has not finished.
+	BlockedBy []MissionBlocker `json:"blocked_by,omitempty"`
+
+	// LastRun is the most recent run, absent when the issue has never run.
+	//
+	// The endpoint already reads this row — the waiting list is derived from it
+	// — and was throwing it away for every node that is not waiting. Shipping
+	// it costs nothing and is what lets a client open a unit's context without
+	// a second request, which is the one rule this view may not break.
+	LastRun *MissionNodeRun `json:"last_run,omitempty"`
+
+	// StatusSince is when the issue entered the status it is in, from the
+	// activity row that logged the transition. Exact is false when no such row
+	// names the current status and this is issue.updated_at instead — the same
+	// distinction the waiting list draws, for the same reason: a wrong duration
+	// is worse than an admitted approximation.
+	StatusSince      *time.Time `json:"status_since,omitempty"`
+	StatusSinceExact bool       `json:"status_since_exact"`
+}
+
+// MissionBlocker is one unit standing between another and its turn.
+type MissionBlocker struct {
+	IssueID    string `json:"issue_id"`
+	Identifier string `json:"identifier"`
+	Title      string `json:"title"`
+	Status     string `json:"status"`
+	// Stage is the blocker's own stage, so a reader can see the ordering that
+	// produced this rather than taking the claim on faith.
+	Stage *int32 `json:"stage,omitempty"`
+	// Relation is why it blocks. One value today — the barrier is the only
+	// blocking relation the product records — and a field rather than an
+	// assumption, so a real dependency link could join it without a migration
+	// on the wire format.
+	Relation string `json:"relation"`
+}
+
+const blockerStageBarrier = "stage_barrier"
+
+// missionBlockers names, for each unit above the frontier, the open units of
+// the frontier stage.
+//
+// Only the frontier: a unit in stage 4 is transitively behind stages 1-3, but
+// the thing to go and look at is the one stage that is actually open. Listing
+// every unit below would turn an answer into a census.
+func missionBlockers(nodes []MissionNode, stages []MissionStage, rootID string) map[string][]MissionBlocker {
+	out := map[string][]MissionBlocker{}
+
+	var frontier *MissionStage
+	for i := range stages {
+		if stages[i].Frontier {
+			frontier = &stages[i]
+			break
+		}
+	}
+	// No frontier means every stage is closed; nothing is behind anything.
+	// A nil stage number is the single implicit stage of an unstaged set, which
+	// has nothing below it to be blocked by.
+	if frontier == nil || frontier.Stage == nil {
+		return out
+	}
+
+	byID := make(map[string]*MissionNode, len(nodes))
+	for i := range nodes {
+		byID[nodes[i].ID] = &nodes[i]
+	}
+
+	blockers := make([]MissionBlocker, 0, len(frontier.IssueIDs))
+	for _, id := range frontier.IssueIDs {
+		node, ok := byID[id]
+		if !ok || node.Terminal {
+			continue
+		}
+		blockers = append(blockers, MissionBlocker{
+			IssueID:    node.ID,
+			Identifier: node.Identifier,
+			Title:      node.Title,
+			Status:     node.Status,
+			Stage:      node.Stage,
+			Relation:   blockerStageBarrier,
+		})
+	}
+	if len(blockers) == 0 {
+		return out
+	}
+
+	for i := range nodes {
+		node := &nodes[i]
+		if node.ParentID == nil || *node.ParentID != rootID {
+			continue
+		}
+		// An unstaged child is ignored by the barrier, so it is not behind it.
+		if node.Stage == nil || *node.Stage <= *frontier.Stage {
+			continue
+		}
+		out[node.ID] = blockers
+	}
+	return out
+}
+
+// MissionNodeRun is the latest run of one unit. Every field is a column the
+// product already writes; the view adds no state of its own.
+type MissionNodeRun struct {
+	TaskID        string     `json:"task_id"`
+	Status        string     `json:"status"`
+	FailureReason string     `json:"failure_reason,omitempty"`
+	WaitReason    string     `json:"wait_reason,omitempty"`
+	DispatchedAt  *time.Time `json:"dispatched_at,omitempty"`
+	StartedAt     *time.Time `json:"started_at,omitempty"`
+	CompletedAt   *time.Time `json:"completed_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 type MissionNodeUsage struct {
@@ -498,6 +623,20 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 			s := row.Stage.Int32
 			node.Stage = &s
 		}
+		if task, ok := tasksByIssue[id]; ok {
+			node.LastRun = missionNodeRun(task)
+		}
+		// Same rule the waiting list applies: the transition row is the only
+		// honest answer, and updated_at is an admitted fallback.
+		if change, ok := changeByIssue[id]; ok && !change.at.IsZero() && change.to == row.Status {
+			at := change.at
+			node.StatusSince = &at
+			node.StatusSinceExact = true
+		} else {
+			at := row.UpdatedAt.Time.UTC()
+			node.StatusSince = &at
+			node.StatusSinceExact = false
+		}
 
 		nodeIndex[id] = len(nodes)
 		nodes = append(nodes, node)
@@ -538,6 +677,11 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 	})
 
 	stages, unstagedIgnored := missionStages(nodes, uuidToString(root.ID))
+	for id, blockers := range missionBlockers(nodes, stages, uuidToString(root.ID)) {
+		if i, ok := nodeIndex[id]; ok {
+			nodes[i].BlockedBy = blockers
+		}
+	}
 
 	// Stalled barriers, at EVERY level — a branch three deep whose stage 2 was
 	// never promoted stops that branch just as dead as one at the root.
@@ -671,6 +815,36 @@ func missionWaitingUnit(
 		unit.WaitedSecs = 0
 	}
 	return unit, true
+}
+
+// missionNodeRun narrows the task row to the fields a reader needs. The row
+// carries more; the view ships what it will show and nothing else, the same
+// call ListMissionTree makes about description and properties.
+func missionNodeRun(task db.ListMissionLatestTasksRow) *MissionNodeRun {
+	run := &MissionNodeRun{
+		TaskID:    uuidToString(task.TaskID),
+		Status:    task.Status,
+		CreatedAt: task.CreatedAt.Time.UTC(),
+	}
+	if task.FailureReason.Valid {
+		run.FailureReason = task.FailureReason.String
+	}
+	if task.WaitReason.Valid {
+		run.WaitReason = task.WaitReason.String
+	}
+	if task.DispatchedAt.Valid {
+		at := task.DispatchedAt.Time.UTC()
+		run.DispatchedAt = &at
+	}
+	if task.StartedAt.Valid {
+		at := task.StartedAt.Time.UTC()
+		run.StartedAt = &at
+	}
+	if task.CompletedAt.Valid {
+		at := task.CompletedAt.Time.UTC()
+		run.CompletedAt = &at
+	}
+	return run
 }
 
 // markWaitingBelow sets WaitingBelow on every ancestor of a parked unit.

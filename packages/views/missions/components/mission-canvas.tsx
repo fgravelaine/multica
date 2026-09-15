@@ -32,11 +32,15 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Hand, Pause } from "lucide-react";
-import type { MissionNode, MissionResponse } from "@multica/core/types";
-import { useWorkspacePaths } from "@multica/core/paths";
+import { CircleSlash, Eye, Hand, TriangleAlert, LogIn } from "lucide-react";
+import type {
+  MissionNode,
+  MissionResponse,
+  MissionWaitingReason,
+} from "@multica/core/types";
 import { useTheme } from "@multica/ui/components/common/theme-provider";
 import { cn } from "@multica/ui/lib/utils";
+import { ActorAvatar } from "../../common/actor-avatar";
 
 const NODE_W = 248;
 /**
@@ -45,7 +49,7 @@ const NODE_W = 248;
  * title would push its own text out of its box. Two lines of title is the
  * budget; longer titles clamp.
  */
-const NODE_H = 84;
+const NODE_H = 92;
 /** Column pitch and row pitch. Generous enough that edges read at 50% zoom. */
 const GAP_X = 96;
 const GAP_Y = 16;
@@ -55,13 +59,55 @@ type StageState = "closed" | "frontier" | "ahead" | "none";
 
 interface MissionNodeData extends Record<string, unknown> {
   node: MissionNode;
-  href: string;
+  /** Opens this unit's context. Stable, or every node re-renders on any pan. */
+  onSelect: (issueId: string) => void;
+  selected: boolean;
   isRoot: boolean;
-  /** This unit is itself in the waiting list — not merely above one. */
-  waiting: boolean;
-  handRaised: boolean;
+  /**
+   * Why this unit is parked, or null when it is not. Not a boolean: "waiting"
+   * is five different facts — a question nobody answered, a dependency, a
+   * review queue, a crashed run, a barrier nobody promoted — and they call for
+   * five different things from the reader. A single pause icon made them look
+   * like one fact.
+   */
+  waitingReason: MissionWaitingReason | null;
   stageState: StageState;
 }
+
+/**
+ * One icon per reason, and the tone matches the panel's chip for the same
+ * reason so the canvas and the list cannot disagree about what a colour means.
+ */
+const REASON_ICON: Record<
+  MissionWaitingReason,
+  { Icon: typeof Hand; tone: string; label: string }
+> = {
+  hand_raised: {
+    Icon: Hand,
+    tone: "text-amber-600 dark:text-amber-400",
+    label: "hand raised — a question nobody has answered",
+  },
+  blocked: {
+    Icon: CircleSlash,
+    tone: "text-rose-600 dark:text-rose-400",
+    label: "blocked",
+  },
+  in_review: {
+    Icon: Eye,
+    tone: "text-muted-foreground",
+    label: "in review — waiting on a reviewer",
+  },
+  run_failed: {
+    Icon: TriangleAlert,
+    tone: "text-rose-600 dark:text-rose-400",
+    label: "the last run failed",
+  },
+  stage_not_promoted: {
+    Icon: LogIn,
+    tone: "text-sky-600 dark:text-sky-400",
+    label: "the stage below closed and nobody promoted this one",
+  },
+};
 
 /**
  * Tidy left-to-right layout.
@@ -129,13 +175,21 @@ function stageStateOf(node: MissionNode, data: MissionResponse): StageState {
 }
 
 function MissionIssueNode({ data }: NodeProps<Node<MissionNodeData>>) {
-  const { node, href, isRoot, waiting, handRaised, stageState } = data;
+  const { node, onSelect, selected, isRoot, waitingReason, stageState } = data;
+  const reason = waitingReason ? REASON_ICON[waitingReason] : null;
   return (
-    <div
+    // A button, not a link. Clicking a unit on the canvas opens its context in
+    // the drawer; leaving the canvas for the issue is a deliberate second act,
+    // from a link inside that drawer. A canvas you fall out of by misclicking
+    // is not one you explore.
+    <button
+      type="button"
+      onClick={() => onSelect(node.id)}
       className={cn(
-        "flex h-[84px] w-[248px] flex-col gap-1 overflow-hidden rounded-lg border bg-card px-3 py-2 shadow-sm transition-colors",
+        "flex h-[92px] w-[248px] cursor-pointer flex-col gap-1 overflow-hidden rounded-lg border bg-card px-3 py-2 text-left shadow-sm transition-colors hover:border-foreground/30",
         isRoot && "border-primary/60 bg-primary/5",
-        waiting && "border-amber-500/70",
+        waitingReason && "border-amber-500/70",
+        selected && "ring-2 ring-primary ring-offset-1 ring-offset-background",
         node.terminal && "opacity-55",
       )}
     >
@@ -143,6 +197,23 @@ function MissionIssueNode({ data }: NodeProps<Node<MissionNodeData>>) {
           and a target on the child, and a node is usually both. */}
       <Handle type="target" position={Position.Left} isConnectable={false} className="!opacity-0" />
       <Handle type="source" position={Position.Right} isConnectable={false} className="!opacity-0" />
+      {/* Separate anchors for the barrier, top and bottom: siblings sit in one
+          column, so a blocker edge drawn left-to-right would run backwards
+          through the nodes between them. */}
+      <Handle
+        id="blocks-source"
+        type="source"
+        position={Position.Bottom}
+        isConnectable={false}
+        className="!opacity-0"
+      />
+      <Handle
+        id="blocks-target"
+        type="target"
+        position={Position.Top}
+        isConnectable={false}
+        className="!opacity-0"
+      />
 
       <div className="flex items-center gap-1.5">
         <span className="font-mono text-[10px] text-muted-foreground">{node.identifier}</span>
@@ -160,47 +231,65 @@ function MissionIssueNode({ data }: NodeProps<Node<MissionNodeData>>) {
           </span>
         ) : null}
         <span className="ml-auto flex items-center gap-1">
-          {handRaised ? <Hand className="size-3 text-amber-600 dark:text-amber-400" /> : null}
-          {!handRaised && waiting ? <Pause className="size-3 text-amber-600 dark:text-amber-400" /> : null}
+          {reason ? (
+            <reason.Icon className={cn("size-3.5", reason.tone)} aria-label={reason.label} />
+          ) : null}
         </span>
       </div>
 
-      <a
-        href={href}
+      <span
         className={cn(
-          "line-clamp-2 flex-1 text-[12px] leading-snug hover:underline",
+          "line-clamp-2 flex-1 text-[12px] leading-snug",
           node.terminal && "line-through",
         )}
       >
         {node.title}
-      </a>
+      </span>
 
-      <span className="shrink-0 text-[10px] text-muted-foreground">{node.status}</span>
-    </div>
+      <div className="flex shrink-0 items-center gap-1.5">
+        {/* Who is on it. The canvas without this says where the work is and
+            not who has it, which is half the question on a team whose units
+            are agents. Resolved from the workspace catalogs the client already
+            holds — three cached list queries, never one per node. */}
+        {node.assignee_type && node.assignee_id ? (
+          <ActorAvatar
+            actorType={node.assignee_type}
+            actorId={node.assignee_id}
+            size="xs"
+            showStatusDot
+          />
+        ) : (
+          <span className="size-4 rounded-full border border-dashed border-muted-foreground/40" />
+        )}
+        <span className="truncate text-[10px] text-muted-foreground">{node.status}</span>
+      </div>
+    </button>
   );
 }
 
 const nodeTypes = { missionIssue: MissionIssueNode };
 
-function Canvas({ data }: { data: MissionResponse }) {
-  const paths = useWorkspacePaths();
+function Canvas({
+  data,
+  selectedId,
+  onSelect,
+}: {
+  data: MissionResponse;
+  selectedId: string | null;
+  onSelect: (issueId: string) => void;
+}) {
   const { resolvedTheme } = useTheme();
 
-  const waitingIds = useMemo(() => {
-    const ids = new Set<string>();
+  // One map, not two sets. The reason comes from the unit the server already
+  // classified — the canvas does not re-derive it, so it cannot drift from what
+  // the panel says about the same unit.
+  const reasonByIssue = useMemo(() => {
+    const map = new Map<string, MissionWaitingReason>();
     for (const unit of [...data.waiting, ...data.with_lead, ...data.stalled]) {
-      ids.add(unit.issue_id);
+      map.set(unit.issue_id, unit.reason);
     }
-    return ids;
+    return map;
   }, [data.waiting, data.with_lead, data.stalled]);
-
-  const handIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const unit of [...data.waiting, ...data.with_lead]) {
-      if (unit.hand) ids.add(unit.issue_id);
-    }
-    return ids;
-  }, [data.waiting, data.with_lead]);
 
   const { nodes, edges } = useMemo(() => {
     const position = layout(data);
@@ -216,10 +305,10 @@ function Canvas({ data }: { data: MissionResponse }) {
       height: NODE_H,
       data: {
         node,
-        href: paths.issueDetail(node.id),
+        onSelect,
+        selected: node.id === selectedId,
         isRoot: node.id === data.root.id,
-        waiting: waitingIds.has(node.id),
-        handRaised: handIds.has(node.id),
+        waitingReason: reasonByIssue.get(node.id) ?? null,
         stageState: stageStateOf(node, data),
       },
       draggable: false,
@@ -244,8 +333,37 @@ function Canvas({ data }: { data: MissionResponse }) {
           : { strokeWidth: 1.25 },
       }));
 
+    // The barrier, drawn. A parent→child edge says "this is part of that"; a
+    // blocker edge says "this cannot start until that finishes", and they are
+    // different claims that must not look alike — so these are rose, dashed,
+    // and arrive at the top of the blocked unit rather than its left side.
+    //
+    // Bounded by the server: only the frontier stage blocks, so this is
+    // (open units in the frontier) × (units above it), never the transitive
+    // closure of the whole tree.
+    const known = new Set(data.nodes.map((n) => n.id));
+    for (const node of data.nodes) {
+      for (const blocker of node.blocked_by ?? []) {
+        if (!known.has(blocker.issue_id)) continue;
+        flowEdges.push({
+          id: `blocks:${blocker.issue_id}->${node.id}`,
+          source: blocker.issue_id,
+          target: node.id,
+          sourceHandle: "blocks-source",
+          targetHandle: "blocks-target",
+          type: "smoothstep",
+          deletable: false,
+          focusable: false,
+          label: "blocks",
+          labelStyle: { fontSize: 9, fill: "var(--color-rose-500)" },
+          labelBgStyle: { fill: "var(--color-background)" },
+          style: { stroke: "var(--color-rose-500)", strokeWidth: 1.25, strokeDasharray: "3 3" },
+        });
+      }
+    }
+
     return { nodes: flowNodes, edges: flowEdges };
-  }, [data, paths, waitingIds, handIds]);
+  }, [data, selectedId, onSelect, reasonByIssue]);
 
   // The minimap is the only place a node's colour has to survive being three
   // pixels wide, so it says one thing: is anything waiting under here.
@@ -265,13 +383,19 @@ function Canvas({ data }: { data: MissionResponse }) {
       minZoom={0.1}
       maxZoom={1.75}
       proOptions={{ hideAttribution: false }}
-      // Read only, stated six ways so no future edit makes it writable by
-      // accident.
+      // Read only: nothing here changes a row. What is off is everything that
+      // mutates the graph — drag, connect, delete.
       nodesDraggable={false}
       nodesConnectable={false}
-      elementsSelectable={false}
-      edgesFocusable={false}
       deleteKeyCode={null}
+      // Selectable stays ON, and not as a concession: React Flow gives a node
+      // `pointer-events: none` unless it is selectable, draggable, or has a
+      // flow-level click handler, so with this off the node's own button never
+      // receives a click and the context drawer cannot open. Selection is view
+      // state — which unit you are looking at — not a write.
+      elementsSelectable
+      selectNodesOnDrag={false}
+      edgesFocusable={false}
       onNodesChange={undefined}
       panOnScroll
       selectionOnDrag={false}
@@ -295,10 +419,18 @@ function Canvas({ data }: { data: MissionResponse }) {
   );
 }
 
-export function MissionCanvas({ data }: { data: MissionResponse }) {
+export function MissionCanvas({
+  data,
+  selectedId,
+  onSelect,
+}: {
+  data: MissionResponse;
+  selectedId: string | null;
+  onSelect: (issueId: string) => void;
+}) {
   return (
     <ReactFlowProvider>
-      <Canvas data={data} />
+      <Canvas data={data} selectedId={selectedId} onSelect={onSelect} />
     </ReactFlowProvider>
   );
 }

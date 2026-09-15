@@ -337,6 +337,8 @@ export type {
 export type {
   MissionNode,
   MissionNodeUsage,
+  MissionNodeRun,
+  MissionBlocker,
   MissionStage,
   MissionHand,
   MissionWaitingUnit,

@@ -416,3 +416,90 @@ func TestMissionStalled_ExcludesAHandThatIsWithALead(t *testing.T) {
 		t.Errorf("stalled = %+v, want none: the unit is already listed with a lead", out)
 	}
 }
+
+// ── The barrier, named ──────────────────────────────────────────────────────
+//
+// Multica records no "blocked by" link (issue_dependency is a dead table with
+// no writer), so the barrier IS the blocking relation. These pin down what the
+// view is allowed to claim from it.
+
+func blockerIDs(blockers []MissionBlocker) []string {
+	out := make([]string, 0, len(blockers))
+	for _, b := range blockers {
+		out = append(out, b.IssueID)
+	}
+	return out
+}
+
+func TestMissionBlockers_OnlyTheFrontierBlocks(t *testing.T) {
+	// Stage 1 open, 2 and 3 behind it. A unit in stage 3 is transitively behind
+	// stage 2 as well, but the thing to go and look at is the open stage.
+	nodes := []MissionNode{
+		{ID: "root"},
+		node("s1a", stageOf(1), false),
+		node("s1b", stageOf(1), true),
+		node("s2a", stageOf(2), false),
+		node("s3a", stageOf(3), false),
+	}
+	stages, _ := missionStages(nodes, "root")
+	blockers := missionBlockers(nodes, stages, "root")
+
+	for _, id := range []string{"s2a", "s3a"} {
+		got := blockerIDs(blockers[id])
+		if len(got) != 1 || got[0] != "s1a" {
+			t.Errorf("%s blocked by %v, want [s1a] — the frontier's open unit only", id, got)
+		}
+	}
+	// A unit IN the frontier is not behind it.
+	if _, ok := blockers["s1a"]; ok {
+		t.Error("a frontier unit must not be reported as blocked by its own stage")
+	}
+	// A terminal unit in the frontier has finished, so it blocks nobody.
+	for _, b := range blockers["s2a"] {
+		if b.IssueID == "s1b" {
+			t.Error("a terminal unit is still named as a blocker")
+		}
+	}
+}
+
+func TestMissionBlockers_EverythingClosedBlocksNothing(t *testing.T) {
+	nodes := []MissionNode{
+		{ID: "root"},
+		node("s1a", stageOf(1), true),
+		node("s2a", stageOf(2), true),
+	}
+	stages, _ := missionStages(nodes, "root")
+	if got := missionBlockers(nodes, stages, "root"); len(got) != 0 {
+		t.Errorf("blockers = %v, want none when every stage is closed", got)
+	}
+}
+
+func TestMissionBlockers_UnstagedChildIsBehindNothing(t *testing.T) {
+	// The barrier ignores an unstaged child entirely, so it cannot be behind
+	// one — the same rule TestMissionStages_UnstagedChildInStagedSetGatesNothing
+	// pins from the other side.
+	nodes := []MissionNode{
+		{ID: "root"},
+		node("s1a", stageOf(1), false),
+		node("loose", nil, false),
+	}
+	stages, _ := missionStages(nodes, "root")
+	blockers := missionBlockers(nodes, stages, "root")
+	if _, ok := blockers["loose"]; ok {
+		t.Error("an unstaged child is reported as blocked by the barrier that ignores it")
+	}
+}
+
+func TestMissionBlockers_ImplicitStageBlocksNothing(t *testing.T) {
+	// An unstaged sibling set is ONE implicit stage with a nil ordinal. Nothing
+	// is below it, so nothing is behind it.
+	nodes := []MissionNode{
+		{ID: "root"},
+		node("a", nil, false),
+		node("b", nil, false),
+	}
+	stages, _ := missionStages(nodes, "root")
+	if got := missionBlockers(nodes, stages, "root"); len(got) != 0 {
+		t.Errorf("blockers = %v, want none for an implicit stage", got)
+	}
+}

@@ -19,7 +19,7 @@
 // Everything here is read-only. There is not one mutation in this file, and
 // every number comes from the one aggregation request.
 
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useDefaultLayout } from "react-resizable-panels";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -44,6 +44,7 @@ import {
 } from "@multica/ui/components/ui/resizable";
 import { cn } from "@multica/ui/lib/utils";
 import { MissionCanvas } from "./mission-canvas";
+import { MissionUnitDrawer } from "./mission-unit-drawer";
 
 /** 1e-10 USD per tick — server/pkg/agent.CostUSDTicksPerUSD. */
 const COST_USD_TICKS_PER_USD = 10_000_000_000;
@@ -76,6 +77,11 @@ export function MissionView({ issueId }: { issueId: string }) {
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: "multica_mission_layout",
   });
+  // Which unit's context is open. Stable callbacks, or every node's data object
+  // is new on each render and React Flow re-renders the whole canvas on a pan.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const select = useCallback((id: string) => setSelectedId(id), []);
+  const closeDrawer = useCallback(() => setSelectedId(null), []);
   const { data, isLoading, error } = useQuery({
     queryKey: ["mission", issueId],
     queryFn: () => api.getMission(issueId),
@@ -105,7 +111,7 @@ export function MissionView({ issueId }: { issueId: string }) {
         onLayoutChanged={onLayoutChanged}
       >
         <ResizablePanel id="canvas" minSize="35%">
-          <MissionCanvas data={data} />
+          <MissionCanvas data={data} selectedId={selectedId} onSelect={select} />
         </ResizablePanel>
         <ResizableHandle />
         <ResizablePanel id="panel" defaultSize="34%" minSize="22%" maxSize="55%">
@@ -119,6 +125,8 @@ export function MissionView({ issueId }: { issueId: string }) {
           </div>
         </ResizablePanel>
       </ResizablePanelGroup>
+
+      <MissionUnitDrawer data={data} issueId={selectedId} onClose={closeDrawer} />
     </div>
   );
 }
