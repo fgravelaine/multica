@@ -3170,6 +3170,15 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                   {/* issue.id, not the route param — the endpoint takes a
                       UUID and the route may carry a human-readable id. */}
                   <SubIssuesAgentWorkingChip parentIssueId={issue.id} />
+                  {/* SPIKE: the mission view. Only offered on an issue that
+                      actually has a tree — on a leaf there is nothing the board
+                      does not already show, and the link would be a dead end. */}
+                  <a
+                    href={paths.mission(issue.id)}
+                    className="text-micro font-medium text-muted-foreground hover:text-foreground hover:underline"
+                  >
+                    Mission view
+                  </a>
                   <input
                     type="checkbox"
                     checked={allChildrenSelected}

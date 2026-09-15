@@ -332,3 +332,15 @@ export type {
   WorkspaceSubscriptionSeatReconcileResult,
   CreateWorkspaceSubscriptionPortalResponse,
 } from "./billing";
+
+// SPIKE (not upstream): the mission view.
+export type {
+  MissionNode,
+  MissionNodeUsage,
+  MissionStage,
+  MissionHand,
+  MissionWaitingUnit,
+  MissionWaitingReason,
+  MissionReferential,
+  MissionResponse,
+} from "./mission";

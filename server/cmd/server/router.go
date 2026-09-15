@@ -1904,6 +1904,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// field on UpdateIssue, so the spike stays clear of the
 					// activity-log and status-transition machinery.
 					r.Put("/routing-policy", h.SetIssueRoutingPolicy)
+					// SPIKE: the mission view. One aggregation endpoint for the
+					// whole tree under this issue — read only, and the only
+					// request the view makes.
+					r.Get("/mission", h.GetMission)
 					// SPIKE: the raised hand. Raise is called by an agent from
 					// inside a run; answer is called by whoever decides.
 					r.Get("/hands", h.ListHands)

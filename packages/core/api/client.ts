@@ -222,6 +222,7 @@ import type {
   CreateCommentSubIssueAgentRequest,
   CreateCommentSubIssueRequest,
   RaisedHand,
+  MissionResponse,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type {
@@ -4372,6 +4373,14 @@ export class ApiClient {
     await this.fetch(`/api/workspaces/${workspaceId}/github/installations/${installationId}`, {
       method: "DELETE",
     });
+  }
+
+  // SPIKE (not upstream): the mission view. ONE request for the whole tree —
+  // the view must never fan out per node. Read only; there is no writing
+  // counterpart to this method.
+  async getMission(issueId: string, depth?: number): Promise<MissionResponse> {
+    const suffix = depth ? `?depth=${depth}` : "";
+    return this.fetch<MissionResponse>(`/api/issues/${issueId}/mission${suffix}`);
   }
 
   // SPIKE (not upstream): the raised hand. A unit stopping for a decision it may
