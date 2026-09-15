@@ -188,6 +188,27 @@ type MissionAutonomy struct {
 	StillOpen      int `json:"still_open"`
 }
 
+// MissionLeadContest is one lead's contest record.
+//
+// The lead's job before escalating is to check whether the answer already
+// exists in a referential it can reach. Nothing enforces that and nothing
+// could — a lead that relays a question unchanged looks identical to one that
+// checked and found nothing. What can be measured is the outcome, and settled
+// against escalated is exactly it.
+//
+// Distinct from the per-referential cut in Prometheus on purpose. This one
+// answers "is this lead contesting or relaying"; the metric answers "is this
+// referential answerable by a lead at all". Two different failures that look
+// the same in one number.
+type MissionLeadContest struct {
+	LeadID    string `json:"lead_id"`
+	LeadName  string `json:"lead_name,omitempty"`
+	Total     int    `json:"total"`
+	Settled   int    `json:"settled"`
+	Escalated int    `json:"escalated"`
+	StillOpen int    `json:"still_open"`
+}
+
 type MissionResponse struct {
 	Root    MissionNode          `json:"root"`
 	Nodes   []MissionNode        `json:"nodes"`
@@ -200,6 +221,8 @@ type MissionResponse struct {
 	WithLead []MissionWaitingUnit `json:"with_lead"`
 	// Autonomy is the measurement the recipient exists to produce.
 	Autonomy MissionAutonomy `json:"autonomy"`
+	// Leads is the same measurement cut per lead: who contests, who relays.
+	Leads []MissionLeadContest `json:"leads"`
 	// Stalled is the silent failure the waiting list cannot catch: a stage
 	// whose predecessor closed and which nobody promoted. Nothing is asking for
 	// anything, every unit looks fine, and the mission has stopped. Kept out of
@@ -345,6 +368,26 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 	if cerr != nil {
 		writeError(w, http.StatusInternalServerError, "failed to count raised hands")
 		return
+	}
+
+	leadRows, lerr := h.Queries.ListMissionLeadContest(r.Context(), issueIDs)
+	if lerr != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load lead contest counts")
+		return
+	}
+	leads := make([]MissionLeadContest, 0, len(leadRows))
+	for _, row := range leadRows {
+		entry := MissionLeadContest{
+			LeadID:    uuidToString(row.LeadID),
+			Total:     int(row.Total),
+			Settled:   int(row.Settled),
+			Escalated: int(row.Escalated),
+			StillOpen: int(row.StillOpen),
+		}
+		if row.LeadName.Valid {
+			entry.LeadName = row.LeadName.String
+		}
+		leads = append(leads, entry)
 	}
 
 	prefix := h.getIssuePrefix(r.Context(), root.WorkspaceID)
@@ -540,6 +583,7 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 			SettledByHuman: int(counts.SettledByHuman),
 			StillOpen:      int(counts.StillOpen),
 		},
+		Leads: leads,
 		Stalled:            stalled,
 		Referentials:       missionReferentials(allHands, referentialLabels),
 		ReferentialStandIn: missionReferentialStandIn,

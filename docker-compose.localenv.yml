@@ -32,6 +32,12 @@ services:
       default:
 
   backend:
+    # SPIKE: the Prometheus listener. 0.0.0.0 inside the container, loopback on
+    # the host — the .env.example warning is about the HOST binding, and this
+    # keeps it. Reachable from the localenv network as api.multica.internal:9090,
+    # which is what an otel-collector scrape target would use.
+    ports:
+      - "127.0.0.1:9091:9090"
     networks:
       default:
       localenv:

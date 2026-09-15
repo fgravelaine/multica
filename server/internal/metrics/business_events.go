@@ -65,10 +65,27 @@ type businessEventMetrics struct {
 	feedbackSubmitted               *prometheus.CounterVec
 	contactSalesSubmitted           *prometheus.CounterVec
 	chatOutputLocalPath             *prometheus.CounterVec
+
+	// SPIKE: the raised hand.
+	raisedHand          *prometheus.CounterVec
+	raisedHandSettled   *prometheus.CounterVec
+	raisedHandEscalated *prometheus.CounterVec
 }
 
 func newBusinessEventMetrics() *businessEventMetrics {
 	return &businessEventMetrics{
+		raisedHand: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "multica_raised_hand_total",
+			Help: "Raised hands, by the referential they interrogate and where they were addressed.",
+		}, metricLabels("multica_raised_hand_total")),
+		raisedHandSettled: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "multica_raised_hand_settled_total",
+			Help: "Raised hands answered, by referential and by who decided (lead or human).",
+		}, metricLabels("multica_raised_hand_settled_total")),
+		raisedHandEscalated: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "multica_raised_hand_escalated_total",
+			Help: "Raised hands a lead could not settle, by referential.",
+		}, metricLabels("multica_raised_hand_escalated_total")),
 		signup: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "multica_signup_total",
 			Help: "Total user signups (account creations).",
@@ -220,6 +237,9 @@ func (e *businessEventMetrics) collectors() []prometheus.Collector {
 		return nil
 	}
 	return []prometheus.Collector{
+		e.raisedHand,
+		e.raisedHandSettled,
+		e.raisedHandEscalated,
 		e.signup,
 		e.workspaceCreated,
 		e.teamInviteSent,
@@ -546,4 +566,49 @@ func boolLabel(b bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+// SPIKE: the raised hand.
+//
+// Three counters, and the useful number is a ratio between two of them:
+//
+//   settled{level="lead"} / (settled{level="lead"} + escalated)
+//
+// per referential. That is the contest step — the lead checking whether the
+// answer already exists before disturbing anyone — working or not working. A
+// referential whose ratio is near zero is one no lead can answer from, which
+// is a different finding from a referential nobody asks about.
+//
+// No lead label, on purpose. A lead is an agent UUID and every label in this
+// package is a bounded enum; the per-lead breakdown lives in the mission API,
+// where cardinality costs nothing.
+
+// RecordRaisedHand counts a hand at the moment it is raised.
+func (m *BusinessMetrics) RecordRaisedHand(referential, recipient string) {
+	if m == nil || m.events == nil {
+		return
+	}
+	m.events.raisedHand.WithLabelValues(
+		NormalizeReferential(referential),
+		NormalizeHandRecipient(recipient),
+	).Inc()
+}
+
+// RecordRaisedHandSettled counts a hand being answered, by who decided.
+func (m *BusinessMetrics) RecordRaisedHandSettled(referential, level string) {
+	if m == nil || m.events == nil {
+		return
+	}
+	m.events.raisedHandSettled.WithLabelValues(
+		NormalizeReferential(referential),
+		NormalizeHandRecipient(level),
+	).Inc()
+}
+
+// RecordRaisedHandEscalated counts a lead passing a hand up.
+func (m *BusinessMetrics) RecordRaisedHandEscalated(referential string) {
+	if m == nil || m.events == nil {
+		return
+	}
+	m.events.raisedHandEscalated.WithLabelValues(NormalizeReferential(referential)).Inc()
 }

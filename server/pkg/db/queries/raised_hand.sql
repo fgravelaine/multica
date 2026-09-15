@@ -39,10 +39,14 @@ LIMIT 1;
 -- through a lead first. CAS on the current shape so a second escalation, or an
 -- escalation of a hand that was never with a lead, writes nothing.
 UPDATE raised_hand
-SET recipient_type  = 'human',
-    recipient_id    = NULL,
-    escalated_at    = now(),
-    escalation_note = sqlc.narg(escalation_note)
+SET recipient_type       = 'human',
+    -- The lead moves from "who has it" to "who had it". recipient_id is the
+    -- present tense and must not claim a hand is still with a lead; the
+    -- history column is what the per-lead contest ratio counts.
+    escalated_by_lead_id = recipient_id,
+    recipient_id         = NULL,
+    escalated_at         = now(),
+    escalation_note      = sqlc.narg(escalation_note)
 WHERE id = @id
   AND status = 'open'
   AND recipient_type = 'lead'
@@ -97,3 +101,34 @@ SET status            = 'answered',
     answered_at       = now()
 WHERE id = @id AND status = 'open'
 RETURNING *;
+
+-- name: ListMissionLeadContest :many
+-- SPIKE: the contest ratio, per lead.
+--
+-- The lead's job before escalating is to CONTEST — check whether the answer
+-- already exists in a referential it can reach. Nothing enforces that, and
+-- nothing could: a lead that forwards a question unchanged looks identical to
+-- one that checked first and found nothing. What CAN be measured is the
+-- outcome, and settled-against-escalated is exactly it.
+--
+-- Per lead rather than per referential, which is the Prometheus cut: this one
+-- answers "is this lead contesting or relaying", the metric answers "is this
+-- referential answerable by a lead at all". Two different failures that look
+-- the same in a single number.
+--
+-- Only hands that reached a lead are counted. A hand raised by an agent with no
+-- squad never had a contest step to skip, and including it would penalise a
+-- lead for work it never saw.
+SELECT
+    COALESCE(h.recipient_id, h.escalated_by_lead_id)::uuid    AS lead_id,
+    a.name                                                    AS lead_name,
+    COUNT(*)::int                                             AS total,
+    COUNT(*) FILTER (WHERE h.answered_by_level = 'lead')::int  AS settled,
+    COUNT(*) FILTER (WHERE h.escalated_at IS NOT NULL)::int    AS escalated,
+    COUNT(*) FILTER (WHERE h.status = 'open')::int             AS still_open
+FROM raised_hand h
+LEFT JOIN agent a ON a.id = COALESCE(h.recipient_id, h.escalated_by_lead_id)
+WHERE h.issue_id = ANY(@issue_ids::uuid[])
+  AND COALESCE(h.recipient_id, h.escalated_by_lead_id) IS NOT NULL
+GROUP BY 1, 2
+ORDER BY 3 DESC;

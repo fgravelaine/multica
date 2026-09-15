@@ -22,6 +22,7 @@ import {
   Hand,
   Layers,
   PauseCircle,
+  Scale,
   Users,
   ShieldQuestion,
 } from "lucide-react";
@@ -83,6 +84,7 @@ export function MissionView({ issueId }: { issueId: string }) {
       <WithLeadSection data={data} paths={paths} />
       <StalledSection data={data} paths={paths} />
       <ReferentialSection data={data} paths={paths} />
+      <LeadContestSection data={data} />
       <StageSection data={data} />
       <TreeSection data={data} paths={paths} />
     </div>
@@ -440,6 +442,64 @@ function ReferentialSection({
             </li>
           )),
         )}
+      </ul>
+    </section>
+  );
+}
+
+// ── 2b. Who contests, who relays ────────────────────────────────────────────
+//
+// A lead's job before escalating is to check whether the answer already exists
+// in a referential it can reach. Nothing enforces that and nothing could — a
+// lead that relays a question unchanged looks identical to one that checked and
+// found nothing. What IS measurable is the outcome.
+//
+// Settled counts only hands the lead answered itself. Escalated counts the ones
+// it passed up. A lead at 0/8 is relaying; a lead at 7/8 is answering from its
+// referentials. Open hands are excluded from the ratio and shown separately,
+// because a hand nobody has touched yet is not evidence either way.
+
+function LeadContestSection({ data }: { data: MissionResponse }) {
+  if (data.leads.length === 0) return null;
+
+  return (
+    <section className="mb-6">
+      <h2 className="mb-2 flex items-center gap-2 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+        <Scale className="size-3.5" />
+        Who contests, who relays
+      </h2>
+      <p className="mb-2 text-caption text-muted-foreground">
+        Hands a lead settled itself, against the ones it passed up. A low share means the
+        referentials are not answering the lead either — or the lead is not asking them.
+      </p>
+      <ul className="divide-y rounded-lg border">
+        {data.leads.map((lead) => {
+          const decided = lead.settled + lead.escalated;
+          const share = decided > 0 ? lead.settled / decided : 0;
+          return (
+            <li key={lead.lead_id} className="flex items-center gap-3 px-3 py-2.5">
+              <span className="w-32 shrink-0 truncate text-sm font-medium">
+                {lead.lead_name || lead.lead_id}
+              </span>
+              <span className="h-4 flex-1 overflow-hidden rounded-sm bg-muted" title="share settled by the lead">
+                <span
+                  className="block h-full bg-emerald-500/60"
+                  style={{ width: `${Math.round(share * 100)}%` }}
+                />
+              </span>
+              <span className="w-32 shrink-0 text-right font-mono text-caption tabular-nums text-muted-foreground">
+                {decided > 0 ? (
+                  <>
+                    {lead.settled}/{decided} settled
+                  </>
+                ) : (
+                  <>nothing decided</>
+                )}
+                {lead.still_open > 0 ? ` · ${lead.still_open} open` : null}
+              </span>
+            </li>
+          );
+        })}
       </ul>
     </section>
   );

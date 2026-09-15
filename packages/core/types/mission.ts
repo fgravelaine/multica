@@ -115,6 +115,20 @@ export interface MissionReferential {
   hands: MissionHand[];
 }
 
+/**
+ * One lead's contest record. Settled against escalated is the closest the
+ * system can get to "did this lead check the referential first" — nothing can
+ * enforce the contest step, but the outcome is measurable.
+ */
+export interface MissionLeadContest {
+  lead_id: string;
+  lead_name?: string;
+  total: number;
+  settled: number;
+  escalated: number;
+  still_open: number;
+}
+
 export interface MissionResponse {
   root: MissionNode;
   nodes: MissionNode[];
@@ -124,6 +138,8 @@ export interface MissionResponse {
   /** Hands addressed to a squad leader — out of the primary list by design. */
   with_lead: MissionWaitingUnit[];
   autonomy: MissionAutonomy;
+  /** The same measurement per lead: who contests, who relays. */
+  leads: MissionLeadContest[];
   /**
    * Stages whose predecessor closed and which nobody promoted. Every unit in
    * one looks fine and the mission has stopped — the failure the waiting list

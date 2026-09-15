@@ -188,6 +188,12 @@ func TestBusinessMetricsRegistryExposesAllFamilies(t *testing.T) {
 	m.RecordEntitlementVersionRegression()
 	m.RecordAutopilotQuotaDecision("observe", "manual", "admitted")
 	m.ObserveRuntimeSweepStage(RuntimeSweepStageLiveness, time.Second, 2, 1)
+	// SPIKE: the raised hand. This gate is why the three counters are exercised
+	// here — a metric declared in businessMetricLabels but never incremented
+	// registers a family that never appears on /metrics.
+	m.RecordRaisedHand("design_system", "lead")
+	m.RecordRaisedHandSettled("design_system", "lead")
+	m.RecordRaisedHandEscalated("architecture")
 
 	families, err := registry.Gather()
 	if err != nil {

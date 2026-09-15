@@ -226,6 +226,8 @@ func (h *Handler) RaiseHand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.Metrics.RecordRaisedHand(referential, recipientType)
+
 	writeMeasuredJSON(w, http.StatusCreated, renderHand(hand))
 }
 
@@ -334,6 +336,8 @@ func (h *Handler) AnswerHand(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to answer raised hand")
 		return
 	}
+
+	h.Metrics.RecordRaisedHandSettled(hand.ReferentialKey.String, level)
 
 	// The decision has to be readable by the resumed run, and a comment is the
 	// only channel the agent already reads. So the object does not REPLACE the
@@ -456,6 +460,8 @@ func (h *Handler) EscalateHand(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to escalate raised hand")
 		return
 	}
+
+	h.Metrics.RecordRaisedHandEscalated(hand.ReferentialKey.String)
 
 	writeMeasuredJSON(w, http.StatusOK, renderHand(escalated))
 }

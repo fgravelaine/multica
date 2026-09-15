@@ -35,6 +35,17 @@ const (
 	labelGate         = "gate"
 	labelOutcome      = "outcome"
 	labelStage        = "stage"
+
+	// SPIKE: the raised hand.
+	//
+	// labelLead is deliberately ABSENT. The per-lead ratio belongs in the
+	// product surface, not here: a lead is an agent UUID, and every label in
+	// this file is a bounded enum. One id label would make the series count
+	// grow with the number of agents in every workspace on the instance, which
+	// is exactly the mistake this table has avoided so far.
+	labelReferential = "referential"
+	labelRecipient   = "recipient"
+	labelLevel       = "level"
 )
 
 var businessMetricLabels = map[string][]string{
@@ -64,6 +75,15 @@ var businessMetricLabels = map[string][]string{
 	"multica_agent_runtime_lookup_total":               {labelSource, labelResult},
 	"multica_issue_metadata_mutation_total":            {labelOp, labelResult},
 	"multica_issue_metadata_mutation_duration_seconds": {labelOp, labelResult},
+
+	// SPIKE: the raised hand. Together these answer "which referential cannot
+	// be answered by a lead" — settled{level=lead} against escalated, per
+	// referential. That ratio is the contest step working or not working, and
+	// it is the reason the referential is a bounded catalog rather than free
+	// text: a label needs a small fixed set of values.
+	"multica_raised_hand_total":           {labelReferential, labelRecipient},
+	"multica_raised_hand_settled_total":   {labelReferential, labelLevel},
+	"multica_raised_hand_escalated_total": {labelReferential},
 
 	// PR3 funnel / community / commercial.
 	"multica_signup_total":                             {labelSignupSource},
