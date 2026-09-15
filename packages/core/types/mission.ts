@@ -70,7 +70,26 @@ export interface MissionHand {
   agent_name?: string;
   /** Catalog key of the body of knowledge this question interrogates. */
   referential?: string;
+  /** Where the hand is addressed: a squad leader, or the human. */
+  recipient_type: "lead" | "human";
+  lead_name?: string;
+  /** True when a lead had it first and could not settle it. */
+  escalated: boolean;
   created_at: string;
+}
+
+/**
+ * Where raised hands ended up. `reached_human` is the number that measures
+ * autonomy — a team whose hands all get settled by a lead is not a team that
+ * stopped asking, it is one whose referentials and leads can answer.
+ */
+export interface MissionAutonomy {
+  total: number;
+  reached_human: number;
+  escalated: number;
+  settled_by_lead: number;
+  settled_by_human: number;
+  still_open: number;
 }
 
 export interface MissionWaitingUnit {
@@ -102,6 +121,9 @@ export interface MissionResponse {
   stages: MissionStage[];
   /** Longest wait first. Deliberately not sorted by priority. */
   waiting: MissionWaitingUnit[];
+  /** Hands addressed to a squad leader — out of the primary list by design. */
+  with_lead: MissionWaitingUnit[];
+  autonomy: MissionAutonomy;
   /**
    * Stages whose predecessor closed and which nobody promoted. Every unit in
    * one looks fine and the mission has stopped — the failure the waiting list

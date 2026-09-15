@@ -342,5 +342,6 @@ export type {
   MissionWaitingUnit,
   MissionWaitingReason,
   MissionReferential,
+  MissionAutonomy,
   MissionResponse,
 } from "./mission";

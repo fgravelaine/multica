@@ -343,3 +343,76 @@ func TestMissionReferential_StandInFlagIsOff(t *testing.T) {
 		t.Errorf("field = %q, want referential_key", missionReferentialField)
 	}
 }
+
+// The recipient split decides what the primary list contains, so the two ways a
+// hand can be "not on you" both need pinning.
+
+func leadHand(id string) *MissionHand {
+	return &MissionHand{ID: id, RecipientType: recipientLead, LeadName: "Obi-Wan"}
+}
+
+func humanHand(id string) *MissionHand {
+	return &MissionHand{ID: id, RecipientType: recipientHuman}
+}
+
+func TestMissionRecipient_LeadHandLeavesThePrimaryList(t *testing.T) {
+	// The whole point of a recipient: a hand with a lead is not an interruption
+	// the human owes an answer to, so it must not be counted as one.
+	units := []MissionWaitingUnit{
+		{IssueID: "a", Reason: waitingHandRaised, Hand: leadHand("h1")},
+		{IssueID: "b", Reason: waitingHandRaised, Hand: humanHand("h2")},
+		{IssueID: "c", Reason: waitingBlocked},
+	}
+
+	withLead := make([]MissionWaitingUnit, 0)
+	onHuman := make([]MissionWaitingUnit, 0)
+	for _, unit := range units {
+		if unit.Hand != nil && unit.Hand.RecipientType == recipientLead {
+			withLead = append(withLead, unit)
+			continue
+		}
+		onHuman = append(onHuman, unit)
+	}
+
+	if len(withLead) != 1 || withLead[0].IssueID != "a" {
+		t.Errorf("withLead = %+v, want the lead-addressed hand only", withLead)
+	}
+	if len(onHuman) != 2 {
+		t.Fatalf("onHuman = %d, want 2", len(onHuman))
+	}
+	// A non-hand reason has no recipient and always stays on the human: nothing
+	// else in the model has a lead to delegate to.
+	if onHuman[1].IssueID != "c" {
+		t.Errorf("blocked unit = %q, want it to stay on the human", onHuman[1].IssueID)
+	}
+}
+
+func TestMissionRecipient_ConstantsAreDistinctFromLevels(t *testing.T) {
+	// recipient is WHERE a hand was sent; level is WHO answered it. They share
+	// their two words and mean different things, and the answer path stamps the
+	// level from the answerer rather than from the recipient precisely so a
+	// human answering a lead-addressed hand is not counted as a lead closure.
+	if recipientLead != levelLead || recipientHuman != levelHuman {
+		t.Error("the two vocabularies are expected to share their words")
+	}
+}
+
+func TestMissionStalled_ExcludesAHandThatIsWithALead(t *testing.T) {
+	// Regression: the exclusion set was built from `waiting` alone, and a hand
+	// addressed to a lead had already left that list in the recipient split. The
+	// same issue then rendered twice — with-a-lead AND stalled. A unit in two
+	// lists at once is a list nobody trusts.
+	now := time.Now()
+	nodes := []MissionNode{
+		{ID: "root"},
+		stalledNode("s1", stageOf(1), "done", true),
+		stalledNode("s2a", stageOf(2), "backlog", false),
+	}
+	withLeadIDs := map[string]struct{}{"s2a": {}}
+
+	out := missionStalled(nodes, withLeadIDs, noTerminalAt,
+		func(string) time.Time { return now }, now)
+	if len(out) != 0 {
+		t.Errorf("stalled = %+v, want none: the unit is already listed with a lead", out)
+	}
+}

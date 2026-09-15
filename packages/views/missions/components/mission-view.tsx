@@ -22,6 +22,7 @@ import {
   Hand,
   Layers,
   PauseCircle,
+  Users,
   ShieldQuestion,
 } from "lucide-react";
 import { api } from "@multica/core/api";
@@ -79,6 +80,7 @@ export function MissionView({ issueId }: { issueId: string }) {
     <div className="mx-auto w-full max-w-5xl px-6 py-6">
       <MissionHeader data={data} issueHref={paths.issueDetail(data.root.id)} />
       <WaitingSection data={data} paths={paths} />
+      <WithLeadSection data={data} paths={paths} />
       <StalledSection data={data} paths={paths} />
       <ReferentialSection data={data} paths={paths} />
       <StageSection data={data} />
@@ -122,6 +124,20 @@ function MissionHeader({ data, issueHref }: { data: MissionResponse; issueHref: 
           </span>
         ) : null}
         {data.truncated ? <span>tree shown to depth {data.max_depth}</span> : null}
+        {/* The number the recipient exists to produce. Raw hands raised is not
+            it: a team whose hands all get settled by a lead has not stopped
+            asking, its referentials and leads can answer. */}
+        {data.autonomy.total > 0 ? (
+          <span>
+            {data.autonomy.total} hands raised ·{" "}
+            <span className="font-medium text-foreground">
+              {data.autonomy.reached_human} reached you
+            </span>
+            {data.autonomy.settled_by_lead > 0
+              ? ` · ${data.autonomy.settled_by_lead} settled by a lead`
+              : null}
+          </span>
+        ) : null}
       </div>
     </header>
   );
@@ -179,6 +195,14 @@ function WaitingSection({
                   <span className="font-mono text-caption text-muted-foreground">{unit.identifier}</span>
                   <span className="text-sm font-medium">{unit.title}</span>
                   <ReasonChip reason={unit.reason} />
+                  {/* A hand a lead already tried and could not settle says
+                      something the raw count does not: the referential was too
+                      thin for the lead too. */}
+                  {unit.hand?.escalated ? (
+                    <span className="rounded-sm border border-border bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      escalated
+                    </span>
+                  ) : null}
                 </span>
                 {unit.detail ? (
                   <span className="mt-0.5 block truncate text-caption text-muted-foreground">
@@ -293,6 +317,66 @@ function ReasonChip({ reason }: { reason: MissionWaitingUnit["reason"] }) {
     <span className={cn("rounded-sm border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide", tone)}>
       {REASON_LABEL[reason]}
     </span>
+  );
+}
+
+// ── 1c. With a lead ─────────────────────────────────────────────────────────
+//
+// Below the two lists that are on you, because these are not. A hand addressed
+// to a squad leader is out of the primary list by construction — that is what
+// having a recipient buys, and the section exists so the work is still visible
+// without being counted as an interruption you owe an answer to.
+
+function WithLeadSection({
+  data,
+  paths,
+}: {
+  data: MissionResponse;
+  paths: ReturnType<typeof useWorkspacePaths>;
+}) {
+  if (data.with_lead.length === 0) return null;
+
+  return (
+    <section className="mb-6">
+      <h2 className="mb-2 flex items-center gap-2 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+        <Users className="size-3.5" />
+        With a lead ({data.with_lead.length})
+      </h2>
+      <p className="mb-2 text-caption text-muted-foreground">
+        Raised, but not on you. The lead answers it, or escalates what it cannot settle.
+      </p>
+      <ul className="divide-y rounded-lg border border-dashed">
+        {data.with_lead.map((unit) => (
+          <li key={unit.issue_id}>
+            <a
+              href={paths.issueDetail(unit.issue_id)}
+              className="flex items-start gap-3 px-3 py-2.5 transition-colors hover:bg-accent/50"
+            >
+              <span className="w-12 shrink-0 pt-0.5 text-right font-mono text-caption tabular-nums text-muted-foreground">
+                {unit.since_exact ? "" : "~"}
+                {formatWaited(unit.waited_seconds)}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-baseline gap-2">
+                  <span className="font-mono text-caption text-muted-foreground">{unit.identifier}</span>
+                  <span className="text-sm font-medium">{unit.title}</span>
+                  {unit.hand?.lead_name ? (
+                    <span className="rounded-sm border border-border bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      {unit.hand.lead_name}
+                    </span>
+                  ) : null}
+                </span>
+                {unit.detail ? (
+                  <span className="mt-0.5 block truncate text-caption text-muted-foreground">
+                    {unit.detail}
+                  </span>
+                ) : null}
+              </span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

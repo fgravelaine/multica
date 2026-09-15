@@ -98,9 +98,14 @@ SELECT
     h.created_at,
     h.agent_id,
     h.referential_key,
-    a.name AS agent_name
+    h.recipient_type,
+    h.recipient_id,
+    h.escalated_at,
+    a.name AS agent_name,
+    lead.name AS lead_name
 FROM raised_hand h
 LEFT JOIN agent a ON a.id = h.agent_id
+LEFT JOIN agent lead ON lead.id = h.recipient_id
 WHERE h.issue_id = ANY(@issue_ids::uuid[])
   AND h.status = 'open'
 ORDER BY h.created_at;

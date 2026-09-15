@@ -158,6 +158,9 @@ func runHandList(cmd *cobra.Command, args []string) error {
 		if ref := strVal(hand, "referential"); ref != "" {
 			fmt.Printf("referential: %s\n", ref)
 		}
+		if rt := strVal(hand, "recipient_type"); rt != "" {
+			fmt.Printf("with:        %s\n", rt)
+		}
 		if rec := strVal(hand, "recommendation"); rec != "" {
 			fmt.Printf("recommends: %s\n", rec)
 		}
@@ -222,6 +225,46 @@ func runHandAnswer(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// ── Escalate ────────────────────────────────────────────────────────────────
+
+var handEscalateCmd = &cobra.Command{
+	Use:   "escalate <issue>",
+	Short: "Pass a hand up: the lead could not settle it",
+	Long: "The lead's move when the answer is not in any referential it can\n" +
+		"reach and it may not decide itself.\n\n" +
+		"Its job before this is to CONTEST: most raised hands close against a\n" +
+		"referential without anyone being disturbed. A lead that forwards the\n" +
+		"question unchanged has only moved the interruption. Use --note to say\n" +
+		"what was already ruled out, so the human starts from a smaller question.",
+	Args: cobra.ExactArgs(1),
+	RunE: runHandEscalate,
+}
+
+func runHandEscalate(cmd *cobra.Command, args []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	note, _ := cmd.Flags().GetString("note")
+
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+
+	var hand map[string]any
+	body := map[string]any{}
+	if note != "" {
+		body["note"] = note
+	}
+	if err := client.PostJSON(ctx, "/api/issues/"+args[0]+"/hands/escalate", body, &hand); err != nil {
+		return fmt.Errorf("escalate hand: %w", err)
+	}
+	if output, _ := cmd.Flags().GetString("output"); output == "json" {
+		return cli.PrintJSON(os.Stdout, hand)
+	}
+	fmt.Fprintf(os.Stderr, "Escalated %s. It is now on a human.\n", args[0])
+	return nil
+}
+
 func init() {
 	handRaiseCmd.Flags().String("question", "", "What is being asked, in one line (required)")
 	handRaiseCmd.Flags().StringArray("option", nil, "Repeatable: 'key|label|cost of being wrong' (at least two)")
@@ -237,5 +280,9 @@ func init() {
 
 	handCmd.AddCommand(handRaiseCmd)
 	handCmd.AddCommand(handListCmd)
+	handEscalateCmd.Flags().String("note", "", "What the lead already ruled out, so the human starts from a smaller question")
+	handEscalateCmd.Flags().String("output", "table", "Output format: table or json")
+
 	handCmd.AddCommand(handAnswerCmd)
+	handCmd.AddCommand(handEscalateCmd)
 }

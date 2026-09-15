@@ -196,9 +196,14 @@ SELECT
     h.created_at,
     h.agent_id,
     h.referential_key,
-    a.name AS agent_name
+    h.recipient_type,
+    h.recipient_id,
+    h.escalated_at,
+    a.name AS agent_name,
+    lead.name AS lead_name
 FROM raised_hand h
 LEFT JOIN agent a ON a.id = h.agent_id
+LEFT JOIN agent lead ON lead.id = h.recipient_id
 WHERE h.issue_id = ANY($1::uuid[])
   AND h.status = 'open'
 ORDER BY h.created_at
@@ -213,7 +218,11 @@ type ListMissionOpenHandsRow struct {
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	AgentID        pgtype.UUID        `json:"agent_id"`
 	ReferentialKey pgtype.Text        `json:"referential_key"`
+	RecipientType  string             `json:"recipient_type"`
+	RecipientID    pgtype.UUID        `json:"recipient_id"`
+	EscalatedAt    pgtype.Timestamptz `json:"escalated_at"`
 	AgentName      pgtype.Text        `json:"agent_name"`
+	LeadName       pgtype.Text        `json:"lead_name"`
 }
 
 // Open raised hands anywhere in the tree, with the agent that raised each.
@@ -238,7 +247,11 @@ func (q *Queries) ListMissionOpenHands(ctx context.Context, issueIds []pgtype.UU
 			&i.CreatedAt,
 			&i.AgentID,
 			&i.ReferentialKey,
+			&i.RecipientType,
+			&i.RecipientID,
+			&i.EscalatedAt,
 			&i.AgentName,
+			&i.LeadName,
 		); err != nil {
 			return nil, err
 		}

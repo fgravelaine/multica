@@ -39,6 +39,21 @@ const (
 	minHandOptions = 2
 )
 
+// Where a hand is addressed. `lead` is a squad leader agent that may settle it
+// without disturbing anyone; `human` is the rare destination, and the count of
+// hands that get there is the autonomy number.
+const (
+	recipientLead  = "lead"
+	recipientHuman = "human"
+)
+
+// Who actually decided. Same two words as the recipient, different question:
+// the recipient is where a hand was SENT, the level is who ANSWERED it.
+const (
+	levelLead  = "lead"
+	levelHuman = "human"
+)
+
 // parkedStatus is where a raised hand leaves its issue.
 //
 // `blocked` is the semantically correct status and is NOT used, for a reason
@@ -156,6 +171,23 @@ func (h *Handler) RaiseHand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Who this goes to. The design note's whole point: the human is the rare
+	// destination, and the count that reaches them is what measures autonomy.
+	// A raiser with a squad leader above it addresses the lead; a raiser with
+	// no squad, or one that IS the leader, has nobody above it and goes
+	// straight to the human.
+	recipientType := recipientHuman
+	var recipientID pgtype.UUID
+	if issue.AssigneeID.Valid {
+		if leader, lerr := h.Queries.ResolveHandLead(r.Context(), db.ResolveHandLeadParams{
+			AgentID:     issue.AssigneeID,
+			WorkspaceID: issue.WorkspaceID,
+		}); lerr == nil && leader.Valid {
+			recipientType = recipientLead
+			recipientID = leader
+		}
+	}
+
 	var taskID pgtype.UUID
 	if id, perr := util.ParseUUID(req.TaskID); perr == nil {
 		taskID = id
@@ -171,6 +203,8 @@ func (h *Handler) RaiseHand(w http.ResponseWriter, r *http.Request) {
 		Recommendation: pgtype.Text{String: req.Recommendation, Valid: req.Recommendation != ""},
 		Material:       pgtype.Text{String: req.Material, Valid: req.Material != ""},
 		ReferentialKey: pgtype.Text{String: referential, Valid: true},
+		RecipientType:  recipientType,
+		RecipientID:    recipientID,
 	})
 	if err != nil {
 		// The partial unique index on (issue_id) WHERE status = 'open' is what
@@ -273,12 +307,24 @@ func (h *Handler) AnswerHand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The level is stamped from WHO decided, not from where the hand was
+	// addressed. A human can answer a lead-addressed hand at any time, and
+	// recording that as a lead closure would inflate the one number this whole
+	// mechanism exists to measure.
+	actorType, actorID := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
+	level := levelHuman
+	if actorType == "agent" && hand.RecipientType == recipientLead &&
+		hand.RecipientID.Valid && actorID == uuidToString(hand.RecipientID) {
+		level = levelLead
+	}
+
 	answererID, _ := util.ParseUUID(userID)
 	answered, err := h.Queries.AnswerRaisedHand(r.Context(), db.AnswerRaisedHandParams{
-		ID:           hand.ID,
-		ChosenOption: pgtype.Text{String: chosen.Key, Valid: true},
-		Answer:       pgtype.Text{String: req.Answer, Valid: req.Answer != ""},
-		AnsweredBy:   answererID,
+		ID:              hand.ID,
+		ChosenOption:    pgtype.Text{String: chosen.Key, Valid: true},
+		Answer:          pgtype.Text{String: req.Answer, Valid: req.Answer != ""},
+		AnsweredBy:      answererID,
+		AnsweredByLevel: pgtype.Text{String: level, Valid: true},
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -293,7 +339,6 @@ func (h *Handler) AnswerHand(w http.ResponseWriter, r *http.Request) {
 	// only channel the agent already reads. So the object does not REPLACE the
 	// comment — it produces one. That is not a shortcut: the comment is the
 	// delivery, the object is the decision.
-	actorType, actorID := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
 	h.postHandAnswerComment(r, issue, hand.Question, chosen, req.Answer, actorType, actorID)
 
 	prevStatus := issue.Status
@@ -344,6 +389,16 @@ func renderHand(hand db.RaisedHand) map[string]any {
 	if hand.ReferentialKey.Valid {
 		out["referential"] = hand.ReferentialKey.String
 	}
+	out["recipient_type"] = hand.RecipientType
+	if hand.RecipientID.Valid {
+		out["recipient_id"] = uuidToString(hand.RecipientID)
+	}
+	if hand.EscalatedAt.Valid {
+		out["escalated_at"] = hand.EscalatedAt.Time.UTC()
+	}
+	if hand.AnsweredByLevel.Valid {
+		out["answered_by_level"] = hand.AnsweredByLevel.String
+	}
 	if hand.ChosenOption.Valid {
 		out["chosen_option"] = hand.ChosenOption.String
 	}
@@ -351,4 +406,56 @@ func renderHand(hand db.RaisedHand) map[string]any {
 		out["answer"] = hand.Answer.String
 	}
 	return out
+}
+
+// EscalateHand is the lead giving up: the hand moves to the human and records
+// that it passed through a lead first.
+//
+// The two facts stay separate on the row. recipient_type says where the hand is
+// NOW; escalated_at says it tried a lead and the lead could not settle it. A
+// hand that went straight to the human because its raiser had no squad, and a
+// hand a lead genuinely could not answer, say different things about the same
+// referential — one is a missing lead, the other a referential too thin for a
+// lead to answer from. Collapsing them would hide which.
+func (h *Handler) EscalateHand(w http.ResponseWriter, r *http.Request) {
+	if _, ok := requireUserID(w, r); !ok {
+		return
+	}
+	issue, ok := h.loadIssueForUser(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+
+	var req struct {
+		Note string `json:"note"`
+	}
+	// An empty body is a valid escalation: a lead that cannot compress the
+	// question further still has to be able to pass it on.
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	hand, err := h.Queries.GetOpenHandForIssue(r.Context(), issue.ID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "no open raised hand on this issue")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load raised hand")
+		return
+	}
+
+	escalated, err := h.Queries.EscalateRaisedHand(r.Context(), db.EscalateRaisedHandParams{
+		ID:             hand.ID,
+		EscalationNote: pgtype.Text{String: strings.TrimSpace(req.Note), Valid: strings.TrimSpace(req.Note) != ""},
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The CAS refused: already with the human, or already answered.
+			writeError(w, http.StatusConflict, "this hand is not with a lead")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to escalate raised hand")
+		return
+	}
+
+	writeMeasuredJSON(w, http.StatusOK, renderHand(escalated))
 }

@@ -154,6 +154,9 @@ type MissionHand struct {
 	AgentID        string       `json:"agent_id,omitempty"`
 	AgentName      string       `json:"agent_name,omitempty"`
 	Referential    string       `json:"referential,omitempty"`
+	RecipientType  string       `json:"recipient_type"`
+	LeadName       string       `json:"lead_name,omitempty"`
+	Escalated      bool         `json:"escalated"`
 	CreatedAt      time.Time    `json:"created_at"`
 }
 
@@ -168,11 +171,35 @@ type MissionReferential struct {
 	Hands []MissionHand `json:"hands"`
 }
 
+// MissionAutonomy counts where raised hands ended up, over the whole tree and
+// over every hand, not just the open ones — a measurement of one afternoon is
+// noise.
+//
+// ReachedHuman is the number that matters. The design note is explicit that it,
+// not the raw count of raised hands, is what measures autonomy: a team whose
+// hands all get settled by a lead is not a team that stopped asking, it is a
+// team whose referentials and leads can answer.
+type MissionAutonomy struct {
+	Total          int `json:"total"`
+	ReachedHuman   int `json:"reached_human"`
+	Escalated      int `json:"escalated"`
+	SettledByLead  int `json:"settled_by_lead"`
+	SettledByHuman int `json:"settled_by_human"`
+	StillOpen      int `json:"still_open"`
+}
+
 type MissionResponse struct {
 	Root    MissionNode          `json:"root"`
 	Nodes   []MissionNode        `json:"nodes"`
 	Stages  []MissionStage       `json:"stages"`
 	Waiting []MissionWaitingUnit `json:"waiting"`
+	// WithLead is the half of the raised hands that is NOT on the human. A hand
+	// addressed to a squad leader is out of the primary list by construction —
+	// that is the entire point of a recipient, and leaving it in would mean the
+	// list still counts every interruption as yours.
+	WithLead []MissionWaitingUnit `json:"with_lead"`
+	// Autonomy is the measurement the recipient exists to produce.
+	Autonomy MissionAutonomy `json:"autonomy"`
 	// Stalled is the silent failure the waiting list cannot catch: a stage
 	// whose predecessor closed and which nobody promoted. Nothing is asking for
 	// anything, every unit looks fine, and the mission has stopped. Kept out of
@@ -312,6 +339,14 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The autonomy counters, over EVERY hand in the tree rather than the open
+	// ones: a measurement of one afternoon is noise.
+	counts, cerr := h.Queries.CountMissionHands(r.Context(), issueIDs)
+	if cerr != nil {
+		writeError(w, http.StatusInternalServerError, "failed to count raised hands")
+		return
+	}
+
 	prefix := h.getIssuePrefix(r.Context(), root.WorkspaceID)
 	resolver := issuestatus.NewResolver(root.WorkspaceID)
 	now := time.Now().UTC()
@@ -352,6 +387,11 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 		if row.ReferentialKey.Valid {
 			hand.Referential = row.ReferentialKey.String
 		}
+		hand.RecipientType = row.RecipientType
+		if row.LeadName.Valid {
+			hand.LeadName = row.LeadName.String
+		}
+		hand.Escalated = row.EscalatedAt.Valid
 		// One open hand per issue is enforced by a partial unique index, so the
 		// last write here cannot overwrite a second live question.
 		handsByIssue[hand.IssueID] = hand
@@ -428,6 +468,24 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Split by recipient. A hand with a lead is not on the human, so it leaves
+	// the primary list entirely — that is what having a recipient BUYS, and
+	// leaving it in would mean the list still counts every interruption as
+	// yours.
+	withLead := make([]MissionWaitingUnit, 0)
+	onHuman := make([]MissionWaitingUnit, 0, len(waiting))
+	for _, unit := range waiting {
+		if unit.Hand != nil && unit.Hand.RecipientType == recipientLead {
+			withLead = append(withLead, unit)
+			continue
+		}
+		onHuman = append(onHuman, unit)
+	}
+	waiting = onHuman
+	sort.SliceStable(withLead, func(i, j int) bool {
+		return withLead[i].WaitedSecs > withLead[j].WaitedSecs
+	})
+
 	// Longest wait first. Deliberately not by priority: the question this list
 	// answers is "what has been sitting on me", and a low-priority unit parked
 	// for six days is more interesting than a high-priority one parked for an
@@ -440,8 +498,15 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 
 	// Stalled barriers, at EVERY level — a branch three deep whose stage 2 was
 	// never promoted stops that branch just as dead as one at the root.
-	waitingIDs := make(map[string]struct{}, len(waiting))
+	// Both lists, not just `waiting`. A hand addressed to a lead left `waiting`
+	// in the split above, and excluding only `waiting` here reported the same
+	// issue twice — once as with-a-lead and once as stalled. A unit that
+	// appears in two lists at once is a list nobody trusts.
+	waitingIDs := make(map[string]struct{}, len(waiting)+len(withLead))
 	for _, unit := range waiting {
+		waitingIDs[unit.IssueID] = struct{}{}
+	}
+	for _, unit := range withLead {
 		waitingIDs[unit.IssueID] = struct{}{}
 	}
 	stalled := missionStalled(nodes, waitingIDs, func(id string) (time.Time, bool) {
@@ -459,13 +524,22 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 	// Rolled up over both lists: a collapsed branch must say that something
 	// inside it is on you, and a stalled barrier is on you exactly as much as a
 	// raised hand is.
-	markWaitingBelow(nodes, nodeIndex, append(append([]MissionWaitingUnit{}, waiting...), stalled...))
+	markWaitingBelow(nodes, nodeIndex, append(append(append([]MissionWaitingUnit{}, waiting...), withLead...), stalled...))
 
 	resp := MissionResponse{
 		Root:               nodes[0],
 		Nodes:              nodes,
 		Stages:             stages,
 		Waiting:            waiting,
+		WithLead:           withLead,
+		Autonomy: MissionAutonomy{
+			Total:          int(counts.Total),
+			ReachedHuman:   int(counts.ReachedHuman),
+			Escalated:      int(counts.Escalated),
+			SettledByLead:  int(counts.SettledByLead),
+			SettledByHuman: int(counts.SettledByHuman),
+			StillOpen:      int(counts.StillOpen),
+		},
 		Stalled:            stalled,
 		Referentials:       missionReferentials(allHands, referentialLabels),
 		ReferentialStandIn: missionReferentialStandIn,

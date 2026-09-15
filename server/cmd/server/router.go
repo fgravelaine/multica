@@ -1916,6 +1916,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/hands", h.ListHands)
 					r.Post("/hands", h.RaiseHand)
 					r.Post("/hands/answer", h.AnswerHand)
+					r.Post("/hands/escalate", h.EscalateHand)
 					r.Post("/move", h.MoveIssue)
 					r.Delete("/", h.DeleteIssue)
 					r.Post("/comments/trigger-preview", h.PreviewCommentTriggers)
