@@ -21,6 +21,7 @@ import {
   CircleDot,
   Hand,
   Layers,
+  PauseCircle,
   ShieldQuestion,
 } from "lucide-react";
 import { api } from "@multica/core/api";
@@ -56,6 +57,7 @@ const REASON_LABEL: Record<MissionWaitingUnit["reason"], string> = {
   blocked: "blocked",
   in_review: "in review",
   run_failed: "run failed",
+  stage_not_promoted: "never promoted",
 };
 
 export function MissionView({ issueId }: { issueId: string }) {
@@ -77,6 +79,7 @@ export function MissionView({ issueId }: { issueId: string }) {
     <div className="mx-auto w-full max-w-5xl px-6 py-6">
       <MissionHeader data={data} issueHref={paths.issueDetail(data.root.id)} />
       <WaitingSection data={data} paths={paths} />
+      <StalledSection data={data} paths={paths} />
       <ReferentialSection data={data} paths={paths} />
       <StageSection data={data} />
       <TreeSection data={data} paths={paths} />
@@ -208,13 +211,84 @@ function WaitingSection({
   );
 }
 
+// ── 1b. Stalled at an un-promoted barrier ───────────────────────────────────
+//
+// Its own section, below the waiting list and visibly quieter, because the two
+// are different in kind. A waiting row is something that ASKED. A stalled row
+// asked for nothing — the stage below it finished, nobody promoted this one,
+// and every unit in it still looks perfectly healthy. It is the only way a
+// mission stops without anything appearing wrong, which is exactly why it has
+// to be on the screen you open first.
+
+function StalledSection({
+  data,
+  paths,
+}: {
+  data: MissionResponse;
+  paths: ReturnType<typeof useWorkspacePaths>;
+}) {
+  if (data.stalled.length === 0) return null;
+
+  return (
+    <section className="mb-6">
+      <h2 className="mb-2 flex items-center gap-2 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+        <PauseCircle className="size-3.5" />
+        Stalled at a barrier ({data.stalled.length})
+      </h2>
+      <p className="mb-2 text-caption text-muted-foreground">
+        The stage below closed and nothing promoted these. Nobody is blocked and nothing failed —
+        the mission has simply stopped.
+      </p>
+      <ul className="divide-y rounded-lg border border-dashed">
+        {data.stalled.map((unit) => (
+          <li key={unit.issue_id}>
+            <a
+              href={paths.issueDetail(unit.issue_id)}
+              className="flex items-start gap-3 px-3 py-2.5 transition-colors hover:bg-accent/50"
+            >
+              {/* The clock is the BARRIER'S — how long this stage has been ready
+                  to start — not the child's own updated_at, which would report
+                  the day it was created. */}
+              <span
+                className="w-12 shrink-0 pt-0.5 text-right font-mono text-caption tabular-nums text-muted-foreground"
+                title={
+                  unit.since_exact
+                    ? `the stage below closed ${new Date(unit.since).toLocaleString()}`
+                    : `approximate — the predecessor stage has no complete transition record (${new Date(unit.since).toLocaleString()})`
+                }
+              >
+                {unit.since_exact ? "" : "~"}
+                {formatWaited(unit.waited_seconds)}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-baseline gap-2">
+                  <span className="font-mono text-caption text-muted-foreground">{unit.identifier}</span>
+                  <span className="text-sm font-medium">{unit.title}</span>
+                  <ReasonChip reason={unit.reason} />
+                </span>
+                {unit.detail ? (
+                  <span className="mt-0.5 block truncate text-caption text-muted-foreground">
+                    {unit.detail}
+                  </span>
+                ) : null}
+              </span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function ReasonChip({ reason }: { reason: MissionWaitingUnit["reason"] }) {
   const tone =
     reason === "hand_raised"
       ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400"
       : reason === "run_failed"
         ? "border-rose-500/40 bg-rose-500/10 text-rose-700 dark:text-rose-400"
-        : "border-border bg-muted text-muted-foreground";
+        : reason === "stage_not_promoted"
+          ? "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-400"
+          : "border-border bg-muted text-muted-foreground";
   return (
     <span className={cn("rounded-sm border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide", tone)}>
       {REASON_LABEL[reason]}

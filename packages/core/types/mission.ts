@@ -10,7 +10,9 @@ export type MissionWaitingReason =
   | "hand_raised"
   | "blocked"
   | "in_review"
-  | "run_failed";
+  | "run_failed"
+  /** The stage below closed and nobody promoted this one. Reported separately. */
+  | "stage_not_promoted";
 
 export interface MissionNodeUsage {
   total_input_tokens: number;
@@ -98,6 +100,12 @@ export interface MissionResponse {
   stages: MissionStage[];
   /** Longest wait first. Deliberately not sorted by priority. */
   waiting: MissionWaitingUnit[];
+  /**
+   * Stages whose predecessor closed and which nobody promoted. Every unit in
+   * one looks fine and the mission has stopped — the failure the waiting list
+   * structurally cannot catch.
+   */
+  stalled: MissionWaitingUnit[];
   referentials: MissionReferential[];
   /**
    * True while hands carry no referential of their own and the grouping falls

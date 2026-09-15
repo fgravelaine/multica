@@ -180,3 +180,99 @@ func TestMissionWaitingUnit_NothingToSayIsNotWaiting(t *testing.T) {
 		t.Error("a plain backlog child must not appear in the waiting list")
 	}
 }
+
+// missionStalled is the narrow one. The loose version of this test is "list
+// every backlog child", which floods the only list worth opening, so each
+// refusal below is load-bearing.
+
+func stalledNode(id string, stage *int32, status string, terminal bool) MissionNode {
+	return MissionNode{
+		ID: id, Identifier: id, ParentID: missionTestRoot(),
+		Stage: stage, Status: status, Terminal: terminal,
+	}
+}
+
+func noTerminalAt(string) (time.Time, bool) { return time.Time{}, false }
+
+func TestMissionStalled_PromotedStageIsReported(t *testing.T) {
+	now := time.Now()
+	closed := now.Add(-6 * 24 * time.Hour)
+	nodes := []MissionNode{
+		{ID: "root"},
+		stalledNode("s1", stageOf(1), "done", true),
+		stalledNode("s2a", stageOf(2), "backlog", false),
+		stalledNode("s2b", stageOf(2), "backlog", false),
+	}
+	terminalAt := func(id string) (time.Time, bool) {
+		if id == "s1" {
+			return closed, true
+		}
+		return time.Time{}, false
+	}
+
+	out := missionStalled(nodes, map[string]struct{}{}, terminalAt,
+		func(string) time.Time { return now }, now)
+
+	if len(out) != 2 {
+		t.Fatalf("stalled = %d, want both stage-2 children", len(out))
+	}
+	if out[0].Reason != waitingStageNotPromoted {
+		t.Errorf("reason = %q, want %q", out[0].Reason, waitingStageNotPromoted)
+	}
+	// The clock is the barrier's, not the child's: six days ready to start.
+	if !out[0].Since.Equal(closed) || !out[0].SinceExact {
+		t.Errorf("since = %v exact=%v, want the barrier close %v exact", out[0].Since, out[0].SinceExact, closed)
+	}
+	if out[0].WaitedSecs < 5*24*3600 {
+		t.Errorf("waited = %ds, want ~6 days measured from the barrier", out[0].WaitedSecs)
+	}
+}
+
+func TestMissionStalled_FrontierAtStageOneHasNotStalled(t *testing.T) {
+	// Nothing below stage 1 ever closed, so nothing was left un-promoted. A
+	// mission that has not started is not a mission that stopped.
+	now := time.Now()
+	nodes := []MissionNode{
+		{ID: "root"},
+		stalledNode("s1a", stageOf(1), "backlog", false),
+		stalledNode("s2a", stageOf(2), "backlog", false),
+	}
+	out := missionStalled(nodes, map[string]struct{}{}, noTerminalAt,
+		func(string) time.Time { return now }, now)
+	if len(out) != 0 {
+		t.Errorf("stalled = %+v, want none when the frontier is the first stage", out)
+	}
+}
+
+func TestMissionStalled_UnstagedSetHasNoPromotionToMiss(t *testing.T) {
+	now := time.Now()
+	nodes := []MissionNode{
+		{ID: "root"},
+		stalledNode("a", nil, "done", true),
+		stalledNode("b", nil, "backlog", false),
+	}
+	out := missionStalled(nodes, map[string]struct{}{}, noTerminalAt,
+		func(string) time.Time { return now }, now)
+	if len(out) != 0 {
+		t.Errorf("stalled = %+v, want none in an unstaged set", out)
+	}
+}
+
+func TestMissionStalled_SkipsStartedAndAlreadyWaiting(t *testing.T) {
+	now := time.Now()
+	nodes := []MissionNode{
+		{ID: "root"},
+		stalledNode("s1", stageOf(1), "done", true),
+		// Promoted and in flight — the stage was not missed.
+		stalledNode("s2a", stageOf(2), "in_progress", false),
+		// Backlog, but it already names a better reason in the waiting list.
+		stalledNode("s2b", stageOf(2), "backlog", false),
+	}
+	waitingIDs := map[string]struct{}{"s2b": {}}
+
+	out := missionStalled(nodes, waitingIDs, noTerminalAt,
+		func(string) time.Time { return now }, now)
+	if len(out) != 0 {
+		t.Errorf("stalled = %+v, want none: one is in flight and one is already waiting", out)
+	}
+}

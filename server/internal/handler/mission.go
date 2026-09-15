@@ -51,6 +51,12 @@ const (
 	// waitingRunFailed: the most recent run ended in failure and nothing has
 	// re-run since. The failure_reason travels with it.
 	waitingRunFailed missionWaitingReason = "run_failed"
+	// waitingStageNotPromoted: the stage below this one closed and nobody
+	// promoted this stage. It carries its own clock — how long the barrier has
+	// been open — and it is the one way a mission stops without anything
+	// looking wrong. It is NOT in the waiting list: nothing asked for a
+	// decision, so it is reported separately.
+	waitingStageNotPromoted missionWaitingReason = "stage_not_promoted"
 )
 
 // MissionNode is one issue in the tree.
@@ -74,9 +80,10 @@ type MissionNode struct {
 	Depth          int32   `json:"depth"`
 	Terminal       bool    `json:"terminal"`
 
-	// WaitingBelow is true when this node, or anything beneath it, is in the
-	// waiting list. It is what lets a collapsed branch still say that something
-	// inside it needs a human.
+	// WaitingBelow is true when this node, or anything beneath it, needs a
+	// human — either in the waiting list or stalled at an un-promoted barrier.
+	// It is what lets a collapsed branch still say that something inside it is
+	// on you.
 	WaitingBelow bool `json:"waiting_below"`
 
 	// Usage is absent when the issue has no metered run — which is different
@@ -165,6 +172,11 @@ type MissionResponse struct {
 	Nodes   []MissionNode        `json:"nodes"`
 	Stages  []MissionStage       `json:"stages"`
 	Waiting []MissionWaitingUnit `json:"waiting"`
+	// Stalled is the silent failure the waiting list cannot catch: a stage
+	// whose predecessor closed and which nobody promoted. Nothing is asking for
+	// anything, every unit looks fine, and the mission has stopped. Kept out of
+	// Waiting so that list stays "things that named a reason".
+	Stalled []MissionWaitingUnit `json:"stalled"`
 
 	Referentials []MissionReferential `json:"referentials"`
 	// ReferentialStandIn is true while hands carry no referential of their own
@@ -394,15 +406,37 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 		return waiting[i].WaitedSecs > waiting[j].WaitedSecs
 	})
 
-	markWaitingBelow(nodes, nodeIndex, waiting)
-
 	stages, unstagedIgnored := missionStages(nodes, uuidToString(root.ID))
+
+	// Stalled barriers, at EVERY level — a branch three deep whose stage 2 was
+	// never promoted stops that branch just as dead as one at the root.
+	waitingIDs := make(map[string]struct{}, len(waiting))
+	for _, unit := range waiting {
+		waitingIDs[unit.IssueID] = struct{}{}
+	}
+	stalled := missionStalled(nodes, waitingIDs, func(id string) (time.Time, bool) {
+		if change, ok := changeByIssue[id]; ok && !change.at.IsZero() {
+			return change.at, true
+		}
+		return time.Time{}, false
+	}, func(id string) time.Time {
+		if idx, ok := nodeIndex[id]; ok {
+			return rows[idx].UpdatedAt.Time.UTC()
+		}
+		return now
+	}, now)
+
+	// Rolled up over both lists: a collapsed branch must say that something
+	// inside it is on you, and a stalled barrier is on you exactly as much as a
+	// raised hand is.
+	markWaitingBelow(nodes, nodeIndex, append(append([]MissionWaitingUnit{}, waiting...), stalled...))
 
 	resp := MissionResponse{
 		Root:               nodes[0],
 		Nodes:              nodes,
 		Stages:             stages,
 		Waiting:            waiting,
+		Stalled:            stalled,
 		Referentials:       missionReferentials(allHands),
 		ReferentialStandIn: missionReferentialStandIn,
 		ReferentialField:   missionReferentialField,
@@ -633,4 +667,131 @@ func missionTruncated(rows []db.ListMissionTreeRow, maxDepth int) bool {
 		}
 	}
 	return false
+}
+
+// missionStalled finds stages whose predecessor closed and which nobody
+// promoted, anywhere in the tree.
+//
+// This is the failure the waiting list structurally cannot catch. Every unit in
+// a stalled stage looks fine — backlog, assigned, no failure, nothing asking
+// for anything — and the mission has simply stopped. The product detects the
+// barrier and wakes the parent assignee; whether anything then promotes the
+// next stage is nobody's job, and when it does not happen there is no trace.
+//
+// The test is deliberately narrow, because the loose version of it is just
+// "list every backlog child" and that floods the only list worth opening:
+//
+//   - the sibling set must be STAGED. An unstaged set has one implicit stage,
+//     so there is no promotion step to miss;
+//   - the frontier must NOT be the lowest stage. A mission whose stage 1 has
+//     not started has not stalled, it has not begun;
+//   - the child must be unstarted. A frontier child in progress means the stage
+//     was promoted and is simply not finished;
+//   - and it must not already be in the waiting list, which names a better
+//     reason than this one.
+//
+// The clock is the barrier's, not the child's: how long this stage has been
+// ready to start, measured from the last predecessor to go terminal. "Waiting
+// six days" is the honest number; the child's own updated_at would report the
+// day it was created.
+func missionStalled(
+	nodes []MissionNode,
+	waitingIDs map[string]struct{},
+	terminalAt func(issueID string) (time.Time, bool),
+	updatedAt func(issueID string) time.Time,
+	now time.Time,
+) []MissionWaitingUnit {
+	byParent := map[string][]MissionNode{}
+	for _, node := range nodes {
+		if node.ParentID == nil {
+			continue
+		}
+		byParent[*node.ParentID] = append(byParent[*node.ParentID], node)
+	}
+
+	out := make([]MissionWaitingUnit, 0)
+	for parentID, children := range byParent {
+		stages, _ := missionStages(nodes, parentID)
+		if len(stages) == 0 || stages[0].Stage == nil {
+			continue // unstaged set: no promotion step to miss
+		}
+		frontierIdx := -1
+		for i := range stages {
+			if stages[i].Frontier {
+				frontierIdx = i
+				break
+			}
+		}
+		// No frontier means every stage closed. A frontier at index 0 means
+		// nothing below it ever closed, so nothing was left un-promoted.
+		if frontierIdx <= 0 {
+			continue
+		}
+		frontier := stages[frontierIdx]
+
+		// When the barrier opened: the last predecessor to reach terminal.
+		barrierAt := time.Time{}
+		exact := true
+		for i := 0; i < frontierIdx; i++ {
+			for _, id := range stages[i].IssueIDs {
+				at, ok := terminalAt(id)
+				if !ok {
+					exact = false
+					continue
+				}
+				if at.After(barrierAt) {
+					barrierAt = at
+				}
+			}
+		}
+
+		for _, child := range children {
+			if child.Stage == nil || *child.Stage != *frontier.Stage {
+				continue
+			}
+			if child.Terminal {
+				continue
+			}
+			if _, already := waitingIDs[child.ID]; already {
+				continue
+			}
+			// Unstarted only. `backlog` is the product's parking lot and the
+			// only status that means "never promoted"; anything else means the
+			// stage was promoted and is in flight.
+			if child.Status != issuestatus.Backlog {
+				continue
+			}
+
+			since := barrierAt
+			sinceExact := exact && !barrierAt.IsZero()
+			if since.IsZero() {
+				since = updatedAt(child.ID)
+				sinceExact = false
+			}
+			waited := int64(now.Sub(since).Seconds())
+			if waited < 0 {
+				waited = 0
+			}
+			out = append(out, MissionWaitingUnit{
+				IssueID:    child.ID,
+				Identifier: child.Identifier,
+				Title:      child.Title,
+				Status:     child.Status,
+				Depth:      child.Depth,
+				Reason:     waitingStageNotPromoted,
+				Detail:     "stage " + strconv.Itoa(int(*frontier.Stage)) + " was never promoted",
+				Since:      since,
+				SinceExact: sinceExact,
+				WaitedSecs: waited,
+			})
+		}
+	}
+
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].WaitedSecs != out[j].WaitedSecs {
+			return out[i].WaitedSecs > out[j].WaitedSecs
+		}
+		return out[i].Identifier < out[j].Identifier
+	})
+	return out
 }
