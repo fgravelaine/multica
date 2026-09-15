@@ -2,24 +2,28 @@
 
 // SPIKE (not upstream): the mission view.
 //
-// Reading order is the design, and it is deliberately not the tree:
+// Two surfaces, side by side, because the mission asks two questions that do
+// not have the same shape:
 //
-//   1. what is waiting on a human, longest wait first;
-//   2. which referential the open questions are interrogating;
-//   3. the stage frontier;
-//   4. the tree, collapsed below the first level.
+//   WHERE IS IT — the canvas. Pan and zoom, the tree laid out left to right.
+//   A shape you read at a glance: how wide the mission got, which branch
+//   stopped, how far the frontier is from the root.
 //
-// A tree first would make this a prettier board. The list first makes it a
-// thing you act on. Everything here is read-only — there is not one mutation
-// in this file, and every number comes from the one aggregation request.
+//   WHAT IS WAITING ON ME — the panel. An ordered list, longest wait first,
+//   deliberately not by priority, with the referential diagnostic under it.
+//
+// The canvas is the surface and the panel is the answer; neither replaces the
+// other, and a single scrolling document was the wrong shape for both. The
+// panel's sections are unchanged from the first version — only where they sit.
+//
+// Everything here is read-only. There is not one mutation in this file, and
+// every number comes from the one aggregation request.
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
+import { useDefaultLayout } from "react-resizable-panels";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
-  ChevronRight,
-  CircleDot,
-  Hand,
   Layers,
   PauseCircle,
   Scale,
@@ -28,13 +32,18 @@ import {
 } from "lucide-react";
 import { api } from "@multica/core/api";
 import type {
-  MissionNode,
   MissionResponse,
   MissionStage,
   MissionWaitingUnit,
 } from "@multica/core/types";
 import { useWorkspacePaths } from "@multica/core/paths";
+import {
+  ResizablePanelGroup,
+  ResizablePanel,
+  ResizableHandle,
+} from "@multica/ui/components/ui/resizable";
 import { cn } from "@multica/ui/lib/utils";
+import { MissionCanvas } from "./mission-canvas";
 
 /** 1e-10 USD per tick — server/pkg/agent.CostUSDTicksPerUSD. */
 const COST_USD_TICKS_PER_USD = 10_000_000_000;
@@ -64,6 +73,9 @@ const REASON_LABEL: Record<MissionWaitingUnit["reason"], string> = {
 
 export function MissionView({ issueId }: { issueId: string }) {
   const paths = useWorkspacePaths();
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+    id: "multica_mission_layout",
+  });
   const { data, isLoading, error } = useQuery({
     queryKey: ["mission", issueId],
     queryFn: () => api.getMission(issueId),
@@ -77,22 +89,36 @@ export function MissionView({ issueId }: { issueId: string }) {
     return <p className="p-6 text-caption text-muted-foreground">This issue has no mission to show.</p>;
   }
 
-  // The page owns its scroll. SidebarInset is `h-svh overflow-hidden`, so a
-  // page that does not carry its own scroll container is simply cut off at the
-  // fold — which is what happened here: the tree was unreachable. Same shape
-  // the settings pages use.
+  // SidebarInset is `h-svh overflow-hidden`, so the page owns its own height
+  // and its own scroll. The canvas needs the height (it measures its container
+  // to fit the view); the panel is the only part that scrolls.
   return (
-    <div className="h-full min-h-0 overflow-y-auto overscroll-contain">
-      <div className="mx-auto w-full max-w-5xl px-6 py-6">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0 border-b px-6 py-3">
         <MissionHeader data={data} issueHref={paths.issueDetail(data.root.id)} />
-        <WaitingSection data={data} paths={paths} />
-        <WithLeadSection data={data} paths={paths} />
-        <StalledSection data={data} paths={paths} />
-        <ReferentialSection data={data} paths={paths} />
-        <LeadContestSection data={data} />
-        <StageSection data={data} />
-        <TreeSection data={data} paths={paths} />
       </div>
+
+      <ResizablePanelGroup
+        orientation="horizontal"
+        className="min-h-0 flex-1"
+        defaultLayout={defaultLayout}
+        onLayoutChanged={onLayoutChanged}
+      >
+        <ResizablePanel id="canvas" minSize="35%">
+          <MissionCanvas data={data} />
+        </ResizablePanel>
+        <ResizableHandle />
+        <ResizablePanel id="panel" defaultSize="34%" minSize="22%" maxSize="55%">
+          <div className="h-full min-h-0 overflow-y-auto overscroll-contain border-l px-5 py-4">
+            <WaitingSection data={data} paths={paths} />
+            <WithLeadSection data={data} paths={paths} />
+            <StalledSection data={data} paths={paths} />
+            <ReferentialSection data={data} paths={paths} />
+            <LeadContestSection data={data} />
+            <StageSection data={data} />
+          </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
     </div>
   );
 }
@@ -567,142 +593,3 @@ function StageChip({ stage }: { stage: MissionStage }) {
   );
 }
 
-// ── 4. The tree ─────────────────────────────────────────────────────────────
-
-function TreeSection({
-  data,
-  paths,
-}: {
-  data: MissionResponse;
-  paths: ReturnType<typeof useWorkspacePaths>;
-}) {
-  const childrenOf = useMemo(() => {
-    const map = new Map<string, MissionNode[]>();
-    for (const node of data.nodes) {
-      if (!node.parent_id) continue;
-      const list = map.get(node.parent_id) ?? [];
-      list.push(node);
-      map.set(node.parent_id, list);
-    }
-    return map;
-  }, [data.nodes]);
-
-  // The first level is open; everything below is on demand, which is what keeps
-  // a forty-ticket mission readable at a glance.
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set([data.root.id]));
-  const toggle = (id: string) =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-
-  return (
-    <section>
-      <h2 className="mb-2 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
-        Tree
-      </h2>
-      <div className="rounded-lg border">
-        <TreeRows
-          nodes={childrenOf.get(data.root.id) ?? []}
-          childrenOf={childrenOf}
-          expanded={expanded}
-          toggle={toggle}
-          paths={paths}
-          depth={0}
-        />
-      </div>
-    </section>
-  );
-}
-
-function TreeRows({
-  nodes,
-  childrenOf,
-  expanded,
-  toggle,
-  paths,
-  depth,
-}: {
-  nodes: MissionNode[];
-  childrenOf: Map<string, MissionNode[]>;
-  expanded: Set<string>;
-  toggle: (id: string) => void;
-  paths: ReturnType<typeof useWorkspacePaths>;
-  depth: number;
-}) {
-  return (
-    <>
-      {nodes.map((node) => {
-        const kids = childrenOf.get(node.id) ?? [];
-        const isOpen = expanded.has(node.id);
-        return (
-          <div key={node.id}>
-            <div
-              className="flex items-center gap-2 border-b px-3 py-2 last:border-b-0"
-              style={{ paddingLeft: `${12 + depth * 16}px` }}
-            >
-              {kids.length > 0 ? (
-                <button
-                  type="button"
-                  onClick={() => toggle(node.id)}
-                  aria-label={isOpen ? "Collapse" : "Expand"}
-                  className="shrink-0 rounded-sm p-0.5 hover:bg-accent"
-                >
-                  <ChevronRight
-                    className={cn("size-3.5 text-muted-foreground transition-transform", isOpen && "rotate-90")}
-                  />
-                </button>
-              ) : (
-                <span className="w-[18px] shrink-0" />
-              )}
-
-              <CircleDot
-                className={cn(
-                  "size-3.5 shrink-0",
-                  node.terminal ? "text-muted-foreground/50" : "text-muted-foreground",
-                )}
-              />
-
-              <a
-                href={paths.issueDetail(node.id)}
-                className="min-w-0 flex-1 truncate hover:underline"
-              >
-                <span className="font-mono text-caption text-muted-foreground">{node.identifier}</span>
-                <span className={cn("ml-2 text-sm", node.terminal && "text-muted-foreground line-through")}>
-                  {node.title}
-                </span>
-              </a>
-
-              {node.stage !== null ? (
-                <span className="shrink-0 rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                  s{node.stage}
-                </span>
-              ) : null}
-
-              <span className="shrink-0 text-caption text-muted-foreground">{node.status}</span>
-
-              {/* The only thing a collapsed branch must still be able to say. */}
-              {node.waiting_below ? (
-                <Hand className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
-              ) : (
-                <span className="w-3.5 shrink-0" />
-              )}
-            </div>
-            {isOpen && kids.length > 0 ? (
-              <TreeRows
-                nodes={kids}
-                childrenOf={childrenOf}
-                expanded={expanded}
-                toggle={toggle}
-                paths={paths}
-                depth={depth + 1}
-              />
-            ) : null}
-          </div>
-        );
-      })}
-    </>
-  );
-}

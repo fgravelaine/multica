@@ -16,6 +16,9 @@ catalog:
   '@types/react': ^19.2.0
   '@types/react-dom': ^19.2.0
   '@vitejs/plugin-react': ^6.0.1
+  # SPIKE (not upstream): the mission canvas. Same library n8n's canvas is built
+  # on — n8n uses the Vue port, this is the React one, same author, same model.
+  '@xyflow/react': ^12.8.0
   class-variance-authority: ^0.7.1
   clsx: ^2.1.1
   eslint-plugin-i18next: ^6.1.4

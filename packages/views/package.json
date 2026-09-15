@@ -67,6 +67,7 @@
     "@multica/core": "workspace:*",
     "@multica/ui": "workspace:*",
     "@tanstack/react-virtual": "catalog:",
+    "@xyflow/react": "catalog:",
     "@tiptap/core": "3.27.1",
     "@tiptap/extension-code-block-lowlight": "3.27.1",
     "@tiptap/extension-document": "3.27.1",
