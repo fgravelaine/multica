@@ -34,8 +34,7 @@ services:
   backend:
     # SPIKE: the Prometheus listener. 0.0.0.0 inside the container, loopback on
     # the host — the .env.example warning is about the HOST binding, and this
-    # keeps it. Reachable from the localenv network as api.multica.internal:9090,
-    # which is what an otel-collector scrape target would use.
+    # keeps it. The host port is for `curl`; the stack scrapes over the network.
     ports:
       - "127.0.0.1:9091:9090"
     networks:
@@ -43,6 +42,10 @@ services:
       localenv:
         aliases:
           - api.multica.internal
+    # `metrics.port` is the whole integration. localenv's collector discovers
+    # any container carrying it and never learns this project's name — the same
+    # convention Caddy uses for routes and promtail for logs. Nothing in
+    # localenv mentions multica.
     # https://api.multica.localhost is for NON-BROWSER callers only — the CLI,
     # the daemon, curl. They authenticate with a Bearer token, so none of the
     # cookie problems above apply to them.
@@ -55,6 +58,8 @@ services:
       caddy: api.multica.localhost
       caddy.tls: internal
       caddy.reverse_proxy: "{{upstreams 8080}}"
+      metrics.port: "9090"
+      metrics.job: "multica"
 
   frontend:
     networks:
