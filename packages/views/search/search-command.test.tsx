@@ -215,6 +215,8 @@ vi.mock("@multica/core/paths", async (importOriginal) => ({
     chat: () => "/ws-test/chat",
     myIssues: () => "/ws-test/my-issues",
     issues: () => "/ws-test/issues",
+    // SPIKE (not upstream): the mission index.
+    missions: () => "/ws-test/missions",
     projects: () => "/ws-test/projects",
     autopilots: () => "/ws-test/autopilots",
     agents: () => "/ws-test/agents",

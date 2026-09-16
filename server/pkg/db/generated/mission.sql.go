@@ -263,6 +263,146 @@ func (q *Queries) ListMissionOpenHands(ctx context.Context, issueIds []pgtype.UU
 	return items, nil
 }
 
+const listMissionRollups = `-- name: ListMissionRollups :many
+WITH RECURSIVE tree AS (
+    SELECT i.id AS mission_id, i.id AS node_id, 0::int AS depth
+    FROM issue i
+    WHERE i.id = ANY($1::uuid[])
+
+    UNION ALL
+
+    SELECT t.mission_id, c.id, t.depth + 1
+    FROM issue c
+    JOIN tree t ON c.parent_issue_id = t.node_id
+    WHERE t.depth + 1 <= $2::int
+)
+SELECT
+    t.mission_id,
+    n.status,
+    COUNT(*)::int                       AS units,
+    COALESCE(SUM(hands.n), 0)::bigint   AS open_hands
+FROM tree t
+JOIN issue n ON n.id = t.node_id
+LEFT JOIN LATERAL (
+    SELECT COUNT(*) AS n
+    FROM raised_hand h
+    WHERE h.issue_id = n.id AND h.status = 'open'
+) hands ON TRUE
+WHERE t.node_id <> t.mission_id
+GROUP BY t.mission_id, n.status
+`
+
+type ListMissionRollupsParams struct {
+	MissionIds []pgtype.UUID `json:"mission_ids"`
+	MaxDepth   int32         `json:"max_depth"`
+}
+
+type ListMissionRollupsRow struct {
+	MissionID pgtype.UUID `json:"mission_id"`
+	Status    string      `json:"status"`
+	Units     int32       `json:"units"`
+	OpenHands int64       `json:"open_hands"`
+}
+
+// Per mission, how many units carry each status, and how many open hands.
+//
+// Grouped by status rather than reduced to done/total because "terminal" is not
+// a SQL fact: it depends on the workspace's status catalog, which the
+// issuestatus resolver owns. Re-deriving that here would be a second copy of
+// the rule, and the two would drift. The caller resolves.
+//
+// The hand count is a LATERAL rather than a join so that a node with three open
+// hands stays ONE row — a plain join would multiply the unit counts by the
+// hands and quietly inflate every total.
+// The root itself is not one of its own units.
+func (q *Queries) ListMissionRollups(ctx context.Context, arg ListMissionRollupsParams) ([]ListMissionRollupsRow, error) {
+	rows, err := q.db.Query(ctx, listMissionRollups, arg.MissionIds, arg.MaxDepth)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListMissionRollupsRow{}
+	for rows.Next() {
+		var i ListMissionRollupsRow
+		if err := rows.Scan(
+			&i.MissionID,
+			&i.Status,
+			&i.Units,
+			&i.OpenHands,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMissionRoots = `-- name: ListMissionRoots :many
+
+SELECT
+    i.id,
+    i.number,
+    i.title,
+    i.status,
+    i.updated_at,
+    i.last_activity_at
+FROM issue i
+WHERE i.workspace_id = $1
+  AND i.parent_issue_id IS NULL
+  AND EXISTS (SELECT 1 FROM issue c WHERE c.parent_issue_id = i.id)
+ORDER BY i.last_activity_at DESC NULLS LAST, i.number DESC
+`
+
+type ListMissionRootsRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	Number         int32              `json:"number"`
+	Title          string             `json:"title"`
+	Status         string             `json:"status"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	LastActivityAt pgtype.Timestamptz `json:"last_activity_at"`
+}
+
+// ── The index ───────────────────────────────────────────────────────────────
+//
+// Two queries for the whole list, not one per mission. The same rule the
+// detail endpoint follows, applied one level up: a list that fans out is a list
+// that gets slower the more work you do.
+// Every mission in the workspace.
+//
+// A mission is not an entity in this product. It is a top-level issue that has
+// children — which is exactly what the mission view can say something about,
+// and a leaf is one the board already answers. The EXISTS is the whole
+// definition; nothing new is stored to make this list.
+func (q *Queries) ListMissionRoots(ctx context.Context, workspaceID pgtype.UUID) ([]ListMissionRootsRow, error) {
+	rows, err := q.db.Query(ctx, listMissionRoots, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListMissionRootsRow{}
+	for rows.Next() {
+		var i ListMissionRootsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Number,
+			&i.Title,
+			&i.Status,
+			&i.UpdatedAt,
+			&i.LastActivityAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMissionTree = `-- name: ListMissionTree :many
 
 WITH RECURSIVE tree AS (

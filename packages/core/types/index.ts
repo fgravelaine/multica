@@ -347,4 +347,6 @@ export type {
   MissionAutonomy,
   MissionLeadContest,
   MissionResponse,
+  MissionSummary,
+  MissionListResponse,
 } from "./mission";

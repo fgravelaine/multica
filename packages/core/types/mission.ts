@@ -197,3 +197,29 @@ export interface MissionResponse {
   truncated: boolean;
   max_depth: number;
 }
+
+/**
+ * One mission in the index.
+ *
+ * A mission is not an entity: it is a top-level issue that has children. The
+ * index derives the list every time rather than storing one, which is why it
+ * cannot be filtered, sorted or saved — there is nothing to save it on.
+ */
+export interface MissionSummary {
+  id: string;
+  identifier: string;
+  number: number;
+  title: string;
+  status: string;
+  /** Everything below the root, to the same depth bound the detail view uses. */
+  units: number;
+  done: number;
+  open_hands: number;
+  last_activity_at?: string;
+  updated_at: string;
+}
+
+export interface MissionListResponse {
+  missions: MissionSummary[];
+  max_depth: number;
+}

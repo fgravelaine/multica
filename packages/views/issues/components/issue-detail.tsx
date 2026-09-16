@@ -18,6 +18,7 @@ import {
   CalendarClock,
   CalendarDays,
   ChevronDown,
+  Waypoints,
   ChevronLeft,
   ChevronRight,
   CircleCheck,
@@ -3172,11 +3173,15 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                   <SubIssuesAgentWorkingChip parentIssueId={issue.id} />
                   {/* SPIKE: the mission view. Only offered on an issue that
                       actually has a tree — on a leaf there is nothing the board
-                      does not already show, and the link would be a dead end. */}
+                      does not already show, and the link would be a dead end.
+                      A bordered control rather than a run of small text: the
+                      text version was there for a day and nobody could find
+                      it. */}
                   <a
                     href={paths.mission(issue.id)}
-                    className="text-micro font-medium text-muted-foreground hover:text-foreground hover:underline"
+                    className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-micro font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
                   >
+                    <Waypoints className="size-3" />
                     Mission view
                   </a>
                   <input

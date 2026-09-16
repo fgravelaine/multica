@@ -1999,6 +1999,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 
+			// SPIKE: the mission index. Read only, and the only verb it has —
+			// a mission is a derivation (a top-level issue with children), not
+			// a thing you create, so there is nothing here to POST to.
+			r.Get("/api/missions", h.ListMissions)
+
 			// Projects
 			r.Route("/api/projects", func(r chi.Router) {
 				r.Get("/search", h.SearchProjects)

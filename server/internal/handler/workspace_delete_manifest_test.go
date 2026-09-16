@@ -112,6 +112,12 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	// point: this manifest is a gate, and it caught the new table on the first
 	// full test run.
 	"raised_hand":                        workspaceDelete,
+	// SPIKE: referential. The per-workspace catalog a raised hand names, shaped
+	// after issue_status — so it goes with the workspace the same way, on the
+	// workspace FK's CASCADE. raised_hand.referential_key is deliberately NOT
+	// an FK to it (a hand must outlive the catalog row it names), so the two
+	// are classified independently and neither constrains the other.
+	"referential":                        workspaceDelete,
 	"runtime_profile":                    workspaceDelete,
 	"schema_migrations":                  workspaceDeleteKeep,
 	"seat_capacity_outbox":               workspaceDeleteSettle,

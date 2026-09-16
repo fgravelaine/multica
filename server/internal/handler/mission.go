@@ -1117,3 +1117,127 @@ func missionStalled(
 	})
 	return out
 }
+
+// ── The index ───────────────────────────────────────────────────────────────
+
+// MissionSummary is one mission in the list.
+//
+// Nothing here is stored. A mission is a top-level issue that has children —
+// the product has no mission entity and this view does not invent one, which is
+// also why the list cannot be filtered, sorted or saved: it is a derivation,
+// not a place to put things.
+type MissionSummary struct {
+	ID         string `json:"id"`
+	Identifier string `json:"identifier"`
+	Number     int32  `json:"number"`
+	Title      string `json:"title"`
+	Status     string `json:"status"`
+
+	// Units is everything below the root, to the same depth bound the detail
+	// view uses — so the two never disagree about how big a mission is.
+	Units    int `json:"units"`
+	Done     int `json:"done"`
+	OpenHand int `json:"open_hands"`
+
+	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+type MissionListResponse struct {
+	Missions []MissionSummary `json:"missions"`
+	MaxDepth int              `json:"max_depth"`
+}
+
+// ListMissions is the index: every mission in the workspace, with enough to
+// choose one.
+//
+// Two queries regardless of how many missions there are — the roots, then one
+// recursive rollup over all of them at once. A list that fans out per row is
+// the same mistake as a view that fans out per node, one level up.
+func (h *Handler) ListMissions(w http.ResponseWriter, r *http.Request) {
+	workspaceID := h.resolveWorkspaceID(r)
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
+	if !ok {
+		return
+	}
+
+	roots, err := h.Queries.ListMissionRoots(r.Context(), wsUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list missions")
+		return
+	}
+	if len(roots) == 0 {
+		writeJSON(w, http.StatusOK, MissionListResponse{
+			Missions: []MissionSummary{},
+			MaxDepth: missionMaxDepth,
+		})
+		return
+	}
+
+	missionIDs := make([]pgtype.UUID, 0, len(roots))
+	for _, root := range roots {
+		missionIDs = append(missionIDs, root.ID)
+	}
+
+	rollups, err := h.Queries.ListMissionRollups(r.Context(), db.ListMissionRollupsParams{
+		MissionIds: missionIDs,
+		MaxDepth:   int32(missionMaxDepth),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to roll up missions")
+		return
+	}
+
+	prefix := h.getIssuePrefix(r.Context(), wsUUID)
+	// One resolver for the whole list: the catalog read is amortised across
+	// every mission and every status in it, which is the point of the type.
+	resolver := issuestatus.NewResolver(wsUUID)
+
+	type rollup struct {
+		units, done, hands int
+	}
+	byMission := make(map[string]*rollup, len(roots))
+	for _, row := range rollups {
+		id := uuidToString(row.MissionID)
+		entry, ok := byMission[id]
+		if !ok {
+			entry = &rollup{}
+			byMission[id] = entry
+		}
+		entry.units += int(row.Units)
+		entry.hands += int(row.OpenHands)
+		// Terminal is the workspace's rule, not a string comparison — the same
+		// resolver the detail view uses, so "done" means one thing in both.
+		if isTerminalChildStatus(resolver.Effective(r.Context(), h.Queries, row.Status)) {
+			entry.done += int(row.Units)
+		}
+	}
+
+	missions := make([]MissionSummary, 0, len(roots))
+	for _, root := range roots {
+		id := uuidToString(root.ID)
+		summary := MissionSummary{
+			ID:         id,
+			Identifier: prefix + "-" + strconv.Itoa(int(root.Number)),
+			Number:     root.Number,
+			Title:      root.Title,
+			Status:     root.Status,
+			UpdatedAt:  root.UpdatedAt.Time.UTC(),
+		}
+		if entry, ok := byMission[id]; ok {
+			summary.Units = entry.units
+			summary.Done = entry.done
+			summary.OpenHand = entry.hands
+		}
+		if root.LastActivityAt.Valid {
+			at := root.LastActivityAt.Time.UTC()
+			summary.LastActivityAt = &at
+		}
+		missions = append(missions, summary)
+	}
+
+	writeJSON(w, http.StatusOK, MissionListResponse{
+		Missions: missions,
+		MaxDepth: missionMaxDepth,
+	})
+}

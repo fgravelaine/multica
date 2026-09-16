@@ -223,6 +223,7 @@ import type {
   CreateCommentSubIssueRequest,
   RaisedHand,
   MissionResponse,
+  MissionListResponse,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type {
@@ -4373,6 +4374,12 @@ export class ApiClient {
     await this.fetch(`/api/workspaces/${workspaceId}/github/installations/${installationId}`, {
       method: "DELETE",
     });
+  }
+
+  // SPIKE (not upstream): the mission index. Two queries on the server, one
+  // request here, regardless of how many missions the workspace has.
+  async listMissions(): Promise<MissionListResponse> {
+    return this.fetch<MissionListResponse>("/api/missions");
   }
 
   // SPIKE (not upstream): the mission view. ONE request for the whole tree —

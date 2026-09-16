@@ -116,6 +116,7 @@ type NavKey =
   | "chat"
   | "myIssues"
   | "issues"
+  | "missions"
   | "projects"
   | "autopilots"
   | "agents"
@@ -132,6 +133,7 @@ type NavLabelKey =
   | "chat"
   | "my_issues"
   | "issues"
+  | "missions"
   | "projects"
   | "autopilots"
   | "agents"
@@ -152,6 +154,10 @@ const personalNav: { key: NavKey; labelKey: NavLabelKey }[] = [
 
 const workNav: { key: NavKey; labelKey: NavLabelKey }[] = [
   { key: "issues", labelKey: "issues" },
+  // SPIKE (not upstream): the mission index. Next to Issues because it answers
+  // the question the board cannot — where a mission is, and what is waiting on
+  // you — about the same rows.
+  { key: "missions", labelKey: "missions" },
   { key: "projects", labelKey: "projects" },
   { key: "autopilots", labelKey: "autopilots" },
 ];
