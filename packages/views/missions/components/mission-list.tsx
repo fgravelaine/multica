@@ -6,21 +6,27 @@
 // question "how much is happening" has a different answer at each — and the
 // answer at one rung tells you nothing about the next.
 //
-// The thing this exists for is the ORPHAN. A unit whose declared rung disagrees
+// The thing this exists for is the ORPHAN: a unit whose declared rung disagrees
 // with its parentage — an objective triggered on its own, with no mission over
-// it. That is not expressible when the rung is derived from depth: a parentless
-// objective IS a campaign, and the thing you are looking for is identical to
-// the thing it is mistaken for. Declaring the rung is what makes the
-// disagreement visible, and the count of it is on every tab.
+// it. Not expressible when the rung is derived from depth, because a parentless
+// objective IS a campaign and the two are identical.
+//
+// An orphan is NOT an error, and nothing here paints it as one. It is an
+// ordinary shape — work that started before the thing above it existed, which
+// is most of how work actually starts. It is marked so you can find it, and
+// counted so you can see how much of it there is; it is not red, it carries no
+// warning triangle, and the board does not ask you to fix it.
 //
 // Read only, like the rest of this view.
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Hand, TriangleAlert, Waypoints, X } from "lucide-react";
+import { Hand, Unlink, Waypoints, X } from "lucide-react";
 import { api } from "@multica/core/api";
 import type { MissionBoardRow, MissionLevel } from "@multica/core/types";
 import { useWorkspacePaths } from "@multica/core/paths";
+import { useWorkspaceId } from "@multica/core/hooks";
+import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 import { cn } from "@multica/ui/lib/utils";
 
 const RUNGS: { level: MissionLevel; label: string }[] = [
@@ -96,7 +102,11 @@ export function MissionList() {
                   {counts?.total ?? 0}
                 </span>
                 {counts && counts.orphans > 0 ? (
-                  <span className="rounded-sm bg-rose-500/15 px-1 font-mono text-[10px] text-rose-600 dark:text-rose-400">
+                  <span
+                    title={`${counts.orphans} standing on their own`}
+                    className="flex items-center gap-0.5 rounded-sm bg-muted px-1 font-mono text-[10px] text-muted-foreground"
+                  >
+                    <Unlink className="size-2.5" />
                     {counts.orphans}
                   </span>
                 ) : null}
@@ -113,12 +123,12 @@ export function MissionList() {
             className={cn(
               "flex items-center gap-1.5 rounded-md border px-2 py-0.5 transition-colors disabled:opacity-40",
               orphansOnly
-                ? "border-rose-500/50 bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                ? "border-foreground/30 bg-accent text-foreground"
                 : "text-muted-foreground hover:border-foreground/20",
             )}
           >
-            <TriangleAlert className="size-3" />
-            Orphans only
+            <Unlink className="size-3" />
+            On their own
           </button>
 
           {campaign ? (
@@ -140,7 +150,7 @@ export function MissionList() {
         ) : !data || data.rows.length === 0 ? (
           <p className="rounded-lg border border-dashed px-4 py-6 text-center text-caption text-muted-foreground">
             {orphansOnly
-              ? "No orphans on this rung. Everything here hangs where it says it does."
+              ? "Nothing standing on its own here — every unit hangs where it says it does."
               : "Nothing on this rung."}
           </p>
         ) : (
@@ -167,31 +177,37 @@ function Row({
   showCampaign: boolean;
 }) {
   const paths = useWorkspacePaths();
+  // The workspace's own name for the status, not the key it is stored under.
+  // One cached catalog query for the page, never one per row.
+  const { labelOf } = useIssueStatuses(useWorkspaceId());
   const pct = row.units === 0 ? 0 : Math.round((row.done / row.units) * 100);
 
   return (
     <div className="flex items-center gap-3 px-4 py-2.5 hover:bg-accent/40">
-      <a href={paths.mission(row.id)} className="flex min-w-0 flex-1 items-center gap-3">
+      <a href={paths.tree(row.id)} className="flex min-w-0 flex-1 items-center gap-3">
         <span className="w-16 shrink-0 font-mono text-caption text-muted-foreground">
           {row.identifier}
         </span>
         <span className="min-w-0 flex-1 truncate text-sm">{row.title}</span>
+        <span className="shrink-0 text-[10px] text-muted-foreground">
+          {labelOf(row.status)}
+        </span>
       </a>
 
-      {/* The disagreement, stated rather than implied. A row that is only
-          "missing a parent" reads as incomplete; saying what it claims to be
-          and what the tree says instead is what makes it actionable. */}
+      {/* Stated, not alarmed about. Saying what it claims to be and what the
+          tree says instead is what makes it findable; a red badge would be
+          calling an ordinary shape a fault. */}
       {row.orphan ? (
         <span
           title={
             row.parent
               ? `Declared ${row.level}, but its parent makes it something else`
-              : `Declared ${row.level}, but nothing is above it`
+              : `Declared ${row.level}, with nothing above it`
           }
-          className="flex shrink-0 items-center gap-1 rounded-sm border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-rose-600 dark:text-rose-400"
+          className="flex shrink-0 items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[10px] text-muted-foreground"
         >
-          <TriangleAlert className="size-3" />
-          orphan
+          <Unlink className="size-3" />
+          on its own
         </span>
       ) : null}
 
@@ -210,7 +226,7 @@ function Row({
 
       {/* Only when it says something: on the campaign rung every row IS its own
           campaign, and repeating it would be noise. */}
-      {showCampaign && row.level !== "campaign" ? (
+      {showCampaign && row.level !== "campaign" && !row.orphan ? (
         <button
           type="button"
           onClick={() => onFilterCampaign({ id: row.campaign.id, title: row.campaign.title })}

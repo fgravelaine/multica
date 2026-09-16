@@ -4391,6 +4391,23 @@ export class ApiClient {
     return this.fetch<MissionBoardResponse>(`/api/missions${suffix}`);
   }
 
+  // SPIKE (not upstream): declare that a unit waits on another one — including
+  // one in a different mission or a different squad's tree, which the stage
+  // barrier cannot express because it only orders siblings.
+  async setIssueDependency(issueId: string, dependsOn: string): Promise<void> {
+    await this.fetch(`/api/issues/${issueId}/dependencies`, {
+      method: "POST",
+      body: JSON.stringify({ depends_on: dependsOn }),
+    });
+  }
+
+  async removeIssueDependency(issueId: string, dependsOn: string): Promise<void> {
+    await this.fetch(`/api/issues/${issueId}/dependencies`, {
+      method: "DELETE",
+      body: JSON.stringify({ depends_on: dependsOn }),
+    });
+  }
+
   // SPIKE (not upstream): declare what a unit is meant to be. The only way an
   // orphan comes into existence — undeclared units take their rung from depth
   // and so cannot disagree with their own parentage. null clears it.

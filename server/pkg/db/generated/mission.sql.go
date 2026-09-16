@@ -11,6 +11,41 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const addIssueDependency = `-- name: AddIssueDependency :one
+INSERT INTO issue_dependency (issue_id, depends_on_issue_id, type)
+SELECT $1, $2, 'blocked_by'
+WHERE $1::uuid <> $2::uuid
+  AND NOT EXISTS (
+      SELECT 1 FROM issue_dependency existing
+      WHERE existing.issue_id = $1
+        AND existing.depends_on_issue_id = $2
+        AND existing.type = 'blocked_by'
+  )
+RETURNING id, issue_id, depends_on_issue_id, type
+`
+
+type AddIssueDependencyParams struct {
+	IssueID          pgtype.UUID `json:"issue_id"`
+	DependsOnIssueID pgtype.UUID `json:"depends_on_issue_id"`
+}
+
+// SPIKE: the write path this table never had.
+//
+// Always stored as 'blocked_by' from the blocked unit's side, so the table has
+// one spelling going forward even though the reader tolerates both. A unit
+// cannot block itself, and the same pair is not recorded twice.
+func (q *Queries) AddIssueDependency(ctx context.Context, arg AddIssueDependencyParams) (IssueDependency, error) {
+	row := q.db.QueryRow(ctx, addIssueDependency, arg.IssueID, arg.DependsOnIssueID)
+	var i IssueDependency
+	err := row.Scan(
+		&i.ID,
+		&i.IssueID,
+		&i.DependsOnIssueID,
+		&i.Type,
+	)
+	return i, err
+}
+
 const countIssueAncestors = `-- name: CountIssueAncestors :one
 WITH RECURSIVE up AS (
     SELECT i.id, i.parent_issue_id, 0::int AS height
@@ -280,6 +315,92 @@ func (q *Queries) ListIssuesAtLevel(ctx context.Context, arg ListIssuesAtLevelPa
 			&i.CampaignTitle,
 			&i.ParentNumber,
 			&i.ParentTitle,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMissionDependencies = `-- name: ListMissionDependencies :many
+SELECT
+    d.id,
+    d.type,
+    blocked.id                 AS blocked_issue_id,
+    blocker.id                 AS blocker_issue_id,
+    blocker.number             AS blocker_number,
+    blocker.title              AS blocker_title,
+    blocker.status             AS blocker_status,
+    blocker.assignee_type      AS blocker_assignee_type,
+    blocker.assignee_id        AS blocker_assignee_id,
+    blocker.parent_issue_id    AS blocker_parent_id
+FROM issue_dependency d
+JOIN issue blocked
+    ON blocked.id = CASE WHEN d.type = 'blocked_by' THEN d.issue_id ELSE d.depends_on_issue_id END
+JOIN issue blocker
+    ON blocker.id = CASE WHEN d.type = 'blocked_by' THEN d.depends_on_issue_id ELSE d.issue_id END
+WHERE d.type IN ('blocked_by', 'blocks')
+  AND blocked.id = ANY($1::uuid[])
+`
+
+type ListMissionDependenciesRow struct {
+	ID                  pgtype.UUID `json:"id"`
+	Type                string      `json:"type"`
+	BlockedIssueID      pgtype.UUID `json:"blocked_issue_id"`
+	BlockerIssueID      pgtype.UUID `json:"blocker_issue_id"`
+	BlockerNumber       int32       `json:"blocker_number"`
+	BlockerTitle        string      `json:"blocker_title"`
+	BlockerStatus       string      `json:"blocker_status"`
+	BlockerAssigneeType pgtype.Text `json:"blocker_assignee_type"`
+	BlockerAssigneeID   pgtype.UUID `json:"blocker_assignee_id"`
+	BlockerParentID     pgtype.UUID `json:"blocker_parent_id"`
+}
+
+// What blocks these units, from the dependency table rather than the barrier.
+//
+// The barrier can only order SIBLINGS under one parent, so it cannot express
+// "this task waits on a task in another mission, owned by another squad" — and
+// that is the ordinary case the moment two teams share a release. issue_
+// dependency is the product's own table for it (migration 034-era, type
+// blocks/blocked_by/related) and it had no reader, no writer and no rows.
+//
+// Both directions are read. The table stores a direction in `type`, and the
+// same fact can be written from either end: A says "I am blocked_by B", or B
+// says "I block A". A reader that honoured only one spelling would show half
+// the dependencies in a workspace and look like it was working.
+//
+// `related` is excluded: it is a cross-reference, not a wait.
+//
+// The blocker is joined from `issue` with no workspace or subtree restriction
+// ON PURPOSE. A blocker outside this tree is exactly the case this exists for,
+// and hiding it would reproduce the barrier's limitation in the query that was
+// written to escape it.
+// 'blocked_by': issue_id is blocked by depends_on_issue_id.
+// 'blocks':     issue_id blocks depends_on_issue_id, so the roles swap.
+func (q *Queries) ListMissionDependencies(ctx context.Context, issueIds []pgtype.UUID) ([]ListMissionDependenciesRow, error) {
+	rows, err := q.db.Query(ctx, listMissionDependencies, issueIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListMissionDependenciesRow{}
+	for rows.Next() {
+		var i ListMissionDependenciesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Type,
+			&i.BlockedIssueID,
+			&i.BlockerIssueID,
+			&i.BlockerNumber,
+			&i.BlockerTitle,
+			&i.BlockerStatus,
+			&i.BlockerAssigneeType,
+			&i.BlockerAssigneeID,
+			&i.BlockerParentID,
 		); err != nil {
 			return nil, err
 		}
@@ -795,4 +916,21 @@ func (q *Queries) ListMissionTree(ctx context.Context, arg ListMissionTreeParams
 		return nil, err
 	}
 	return items, nil
+}
+
+const removeIssueDependency = `-- name: RemoveIssueDependency :exec
+DELETE FROM issue_dependency
+WHERE issue_id = $1
+  AND depends_on_issue_id = $2
+  AND type = 'blocked_by'
+`
+
+type RemoveIssueDependencyParams struct {
+	IssueID          pgtype.UUID `json:"issue_id"`
+	DependsOnIssueID pgtype.UUID `json:"depends_on_issue_id"`
+}
+
+func (q *Queries) RemoveIssueDependency(ctx context.Context, arg RemoveIssueDependencyParams) error {
+	_, err := q.db.Exec(ctx, removeIssueDependency, arg.IssueID, arg.DependsOnIssueID)
+	return err
 }

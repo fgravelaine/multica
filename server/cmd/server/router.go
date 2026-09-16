@@ -1911,6 +1911,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// orphan can exist, so it is an explicit act with its own
 					// endpoint rather than a field on UpdateIssue.
 					r.Put("/level", h.SetIssueLevel)
+					// SPIKE: the dependency the stage barrier cannot express —
+					// a wait on a unit in another mission or another squad's
+					// tree. issue_dependency existed with no reader and no
+					// writer; this is the writer.
+					r.Post("/dependencies", h.SetIssueDependency)
+					r.Delete("/dependencies", h.SetIssueDependency)
 					// SPIKE: the mission view. One aggregation endpoint for the
 					// whole tree under this issue — read only, and the only
 					// request the view makes.

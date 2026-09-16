@@ -5,15 +5,26 @@
 // children below — and no view reads it that way. This endpoint answers the two
 // questions the board cannot: where is the mission, and what is waiting on me.
 //
-// READ ONLY, and that is a hard property rather than a current fact. There is
-// no mutation in this file, no new table behind it, and nothing it reports is
-// stored: every number is derived from rows the product already writes, on
-// every request. If a future change here needs to write something, it is not
-// this view any more.
+// THE VIEW IS READ ONLY, and that is a hard property rather than a current
+// fact: GetMission and the board derive every number from rows the product
+// already writes, on every request, and store nothing of their own.
+//
+// Two writers now share the file, and they are not part of the view — they are
+// the vocabulary it needs to have something to read:
+//
+//	SetIssueLevel       declares what a unit is meant to be, which is the only
+//	                    way a unit can disagree with its own parentage.
+//	SetIssueDependency  declares that a unit waits on another, which is the
+//	                    only way a wait can reach outside one parent.
+//
+// Both are single-column writes on their own endpoints. Neither is reachable
+// from a read path. If a change makes GetMission or ListMissions write
+// anything, it is not this view any more.
 package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"sort"
@@ -22,6 +33,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -195,17 +207,33 @@ type MissionBlocker struct {
 	Identifier string `json:"identifier"`
 	Title      string `json:"title"`
 	Status     string `json:"status"`
-	// Stage is the blocker's own stage, so a reader can see the ordering that
-	// produced this rather than taking the claim on faith.
+	// Stage is the blocker's own stage, when the barrier is what produced this,
+	// so a reader can see the ordering rather than take the claim on faith.
 	Stage *int32 `json:"stage,omitempty"`
-	// Relation is why it blocks. One value today — the barrier is the only
-	// blocking relation the product records — and a field rather than an
-	// assumption, so a real dependency link could join it without a migration
-	// on the wire format.
+	// Relation is WHY it blocks, and the two are not interchangeable:
+	//
+	//   stage_barrier — an ordering among siblings. Cannot reach outside the
+	//                   parent, so it can never explain a wait on another team.
+	//   dependency    — a declared link. Reaches anywhere, including a unit in
+	//                   another mission or another campaign entirely.
+	//
+	// A reader needs to tell them apart: a barrier clears itself when the stage
+	// below closes, a dependency clears when somebody finishes a specific thing
+	// that may not be on this board at all.
 	Relation string `json:"relation"`
+	// Outside is true when the blocker is not in this tree — the case the
+	// barrier structurally cannot express, and the reason this field exists.
+	Outside bool `json:"outside,omitempty"`
+	// Who has the blocker, so "waiting on another team" is answerable without
+	// leaving the view. Ids, resolved client-side from the workspace catalogs.
+	AssigneeType *string `json:"assignee_type,omitempty"`
+	AssigneeID   *string `json:"assignee_id,omitempty"`
 }
 
-const blockerStageBarrier = "stage_barrier"
+const (
+	blockerStageBarrier = "stage_barrier"
+	blockerDependency   = "dependency"
+)
 
 const (
 	levelCampaign  = "campaign"
@@ -804,6 +832,43 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 		if i, ok := nodeIndex[id]; ok {
 			nodes[i].BlockedBy = blockers
 		}
+	}
+
+	// Declared dependencies, on top of the barrier. They come second because
+	// they are the ones that can point outside this tree, and a reader scanning
+	// the list should meet the local ordering before the remote wait.
+	deps, err := h.Queries.ListMissionDependencies(r.Context(), issueIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load dependencies")
+		return
+	}
+	for _, dep := range deps {
+		i, ok := nodeIndex[uuidToString(dep.BlockedIssueID)]
+		if !ok {
+			continue
+		}
+		blockerID := uuidToString(dep.BlockerIssueID)
+		// A blocker that is already in this tree is not "outside", even though
+		// it arrived through the dependency table — outside is about where the
+		// unit IS, not about which mechanism named it.
+		_, inTree := nodeIndex[blockerID]
+		blocker := MissionBlocker{
+			IssueID:    blockerID,
+			Identifier: prefix + "-" + strconv.Itoa(int(dep.BlockerNumber)),
+			Title:      dep.BlockerTitle,
+			Status:     dep.BlockerStatus,
+			Relation:   blockerDependency,
+			Outside:    !inTree,
+		}
+		if dep.BlockerAssigneeType.Valid {
+			at := dep.BlockerAssigneeType.String
+			blocker.AssigneeType = &at
+		}
+		if dep.BlockerAssigneeID.Valid {
+			aid := uuidToString(dep.BlockerAssigneeID)
+			blocker.AssigneeID = &aid
+		}
+		nodes[i].BlockedBy = append(nodes[i].BlockedBy, blocker)
 	}
 
 	// Stalled barriers, at EVERY level — a branch three deep whose stage 2 was
@@ -1513,5 +1578,67 @@ func (h *Handler) SetIssueLevel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":    uuidToString(updated.ID),
 		"level": req.Level,
+	})
+}
+
+// SetIssueDependency declares or clears "this unit waits on that one".
+//
+// The write path issue_dependency never had. It is the only way to say that a
+// unit waits on something the stage barrier cannot reach — another mission,
+// another campaign, another squad's work — which is the ordinary case the
+// moment two teams share a release.
+//
+// POST adds, DELETE removes. Both are idempotent: adding twice writes one row,
+// removing something that is not there is not an error.
+func (h *Handler) SetIssueDependency(w http.ResponseWriter, r *http.Request) {
+	issue, ok := h.loadIssueForUser(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+
+	var req struct {
+		DependsOn string `json:"depends_on"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+
+	// Resolved through the same loader as the issue itself, so a caller cannot
+	// name a unit it is not allowed to see and learn that it exists.
+	blocker, ok := h.loadIssueForUser(w, r, req.DependsOn)
+	if !ok {
+		return
+	}
+
+	if r.Method == http.MethodDelete {
+		if err := h.Queries.RemoveIssueDependency(r.Context(), db.RemoveIssueDependencyParams{
+			IssueID:          issue.ID,
+			DependsOnIssueID: blocker.ID,
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to remove dependency")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"removed": true})
+		return
+	}
+
+	// No cycle check. Deliberate, and worth stating: a cycle here is two units
+	// each waiting on the other, which is a real thing a team does to itself
+	// and a thing the view should SHOW rather than refuse to record. Refusing
+	// the write would only move the deadlock somewhere nothing can see it.
+	if _, err := h.Queries.AddIssueDependency(r.Context(), db.AddIssueDependencyParams{
+		IssueID:          issue.ID,
+		DependsOnIssueID: blocker.ID,
+	}); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		// ErrNoRows is the guard clause firing — same pair, or a unit naming
+		// itself. Both are no-ops, not failures.
+		writeError(w, http.StatusInternalServerError, "failed to add dependency")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"issue_id":   uuidToString(issue.ID),
+		"depends_on": uuidToString(blocker.ID),
 	})
 }

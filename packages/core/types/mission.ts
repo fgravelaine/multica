@@ -92,8 +92,19 @@ export interface MissionBlocker {
   title: string;
   status: string;
   stage?: number;
-  /** Why it blocks. `stage_barrier` is the only relation the product records. */
-  relation: string;
+  /**
+   * Why it blocks, and the two do not clear the same way:
+   *
+   *   stage_barrier — an ordering among siblings, cleared when the stage below
+   *                   closes. Cannot reach outside the parent.
+   *   dependency    — a declared link, cleared when somebody finishes one
+   *                   specific thing, which may not be on this board at all.
+   */
+  relation: "stage_barrier" | "dependency" | string;
+  /** True when the blocker is not in this tree — another mission, another team. */
+  outside?: boolean;
+  assignee_type?: string;
+  assignee_id?: string;
 }
 
 /** The latest run of one unit. Every field is a column the product writes. */

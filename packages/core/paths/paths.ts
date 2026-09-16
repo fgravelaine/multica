@@ -29,10 +29,14 @@ function workspaceScoped(slug: string) {
     usage: () => `${ws}/usage`,
     issues: () => `${ws}/issues`,
     issueDetail: (id: string) => `${ws}/issues/${encode(id)}`,
-    // SPIKE (not upstream): the mission view — the tree under one issue, and
-    // the index of every mission in the workspace.
-    missions: () => `${ws}/missions`,
-    mission: (id: string) => `${ws}/missions/${encode(id)}`,
+    // SPIKE (not upstream): the ladder.
+    //
+    // `campaigns` is the board — every unit at one rung, entered at the top.
+    // `tree` is one unit's subtree, and it is NOT /campaigns/:id because you
+    // can open it on any rung: a URL that said campaign while showing a task
+    // would be the same inaccuracy the nav label had.
+    campaigns: () => `${ws}/campaigns`,
+    tree: (id: string) => `${ws}/tree/${encode(id)}`,
     projects: () => `${ws}/projects`,
     projectDetail: (id: string) => `${ws}/projects/${encode(id)}`,
     autopilots: () => `${ws}/autopilots`,

@@ -13,8 +13,9 @@
 // Read only, like the rest. The one thing that leaves is a link to the issue.
 
 import { useMemo } from "react";
-import { ArrowUpRight, Ban, Hand, Layers, Play, Wallet } from "lucide-react";
+import { ArrowUpRight, Ban, ExternalLink, Hand, Layers, Play, Wallet } from "lucide-react";
 import type {
+  MissionBlocker,
   MissionHand,
   MissionLevel,
   MissionNode,
@@ -22,6 +23,8 @@ import type {
   MissionWaitingUnit,
 } from "@multica/core/types";
 import { useWorkspacePaths } from "@multica/core/paths";
+import { useWorkspaceId } from "@multica/core/hooks";
+import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 import { useActorName } from "@multica/core/workspace/hooks";
 import {
   Sheet,
@@ -90,6 +93,38 @@ function Section({
   );
 }
 
+function BlockerRow({
+  blocker,
+  href,
+  label,
+}: {
+  blocker: MissionBlocker;
+  href: string;
+  label: string;
+}) {
+  const { getActorName } = useActorName();
+  return (
+    <a
+      href={href}
+      className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 hover:border-foreground/30"
+    >
+      <span className="font-mono text-[10px] text-muted-foreground">{blocker.identifier}</span>
+      <span className="min-w-0 flex-1 truncate text-caption">{blocker.title}</span>
+      {/* Whose it is, when it is not in this tree. "Waiting on another team" is
+          the question, and an identifier alone does not answer it. */}
+      {blocker.outside ? (
+        <span className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
+          <ExternalLink className="size-3" />
+          {blocker.assignee_type && blocker.assignee_id
+            ? getActorName(blocker.assignee_type, blocker.assignee_id)
+            : "elsewhere"}
+        </span>
+      ) : null}
+      <span className="shrink-0 text-[10px] text-muted-foreground">{label}</span>
+    </a>
+  );
+}
+
 export function MissionUnitDrawer({
   data,
   issueId,
@@ -101,6 +136,7 @@ export function MissionUnitDrawer({
 }) {
   const paths = useWorkspacePaths();
   const { getActorName } = useActorName();
+  const { labelOf } = useIssueStatuses(useWorkspaceId());
 
   const node: MissionNode | undefined = useMemo(
     () => (issueId ? data.nodes.find((n) => n.id === issueId) : undefined),
@@ -161,7 +197,7 @@ export function MissionUnitDrawer({
             <div className="px-4 pb-6">
               <Section icon={<Layers className="size-3.5" />} title="Where it is">
                 <Row label="Status">
-                  {node.status}
+                  {labelOf(node.status)}
                   <span className="ml-2 text-muted-foreground">
                     {node.status_since_exact ? "since" : "last touched"}{" "}
                     {ago(node.status_since)}
@@ -201,29 +237,53 @@ export function MissionUnitDrawer({
 
               {node.blocked_by?.length ? (
                 <Section icon={<Ban className="size-3.5" />} title="Waiting on">
-                  <p className="mb-1.5 text-[11px] text-muted-foreground">
-                    This unit is in stage {node.stage}. It does not start until the
-                    stage below closes — these are the units that have to finish.
-                  </p>
-                  <div className="space-y-1">
-                    {node.blocked_by.map((blocker) => (
-                      <a
-                        key={blocker.issue_id}
-                        href={paths.issueDetail(blocker.issue_id)}
-                        className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 hover:border-foreground/30"
-                      >
-                        <span className="font-mono text-[10px] text-muted-foreground">
-                          {blocker.identifier}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate text-caption">
-                          {blocker.title}
-                        </span>
-                        <span className="shrink-0 text-[10px] text-muted-foreground">
-                          {blocker.status}
-                        </span>
-                      </a>
-                    ))}
-                  </div>
+                  {/* Split by WHY, because the two do not clear the same way and
+                      a reader has to know which kind of wait this is. A barrier
+                      clears when the stage below closes — nobody has to do
+                      anything but finish. A dependency clears when one named
+                      thing is done, possibly by a team that has never heard of
+                      this mission. */}
+                  {node.blocked_by.some((b) => b.relation === "stage_barrier") ? (
+                    <>
+                      <p className="mb-1.5 text-[11px] text-muted-foreground">
+                        In stage {node.stage}, so it does not start until the stage
+                        below closes. These have to finish.
+                      </p>
+                      <div className="space-y-1">
+                        {node.blocked_by
+                          .filter((b) => b.relation === "stage_barrier")
+                          .map((blocker) => (
+                            <BlockerRow
+                              key={blocker.issue_id}
+                              blocker={blocker}
+                              href={paths.issueDetail(blocker.issue_id)}
+                              label={labelOf(blocker.status)}
+                            />
+                          ))}
+                      </div>
+                    </>
+                  ) : null}
+
+                  {node.blocked_by.some((b) => b.relation === "dependency") ? (
+                    <>
+                      <p className="mb-1.5 mt-3 text-[11px] text-muted-foreground">
+                        Declared dependencies. These are not ordering — somebody
+                        said this waits on them, and they can sit anywhere.
+                      </p>
+                      <div className="space-y-1">
+                        {node.blocked_by
+                          .filter((b) => b.relation === "dependency")
+                          .map((blocker) => (
+                            <BlockerRow
+                              key={blocker.issue_id}
+                              blocker={blocker}
+                              href={paths.issueDetail(blocker.issue_id)}
+                              label={labelOf(blocker.status)}
+                            />
+                          ))}
+                      </div>
+                    </>
+                  ) : null}
                 </Section>
               ) : null}
 

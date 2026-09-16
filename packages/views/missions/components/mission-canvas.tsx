@@ -32,12 +32,14 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { CircleSlash, Eye, Hand, TriangleAlert, LogIn } from "lucide-react";
+import { CircleSlash, Eye, Hand, TriangleAlert, LogIn, Lock } from "lucide-react";
 import type {
   MissionNode,
   MissionResponse,
   MissionWaitingReason,
 } from "@multica/core/types";
+import { useWorkspaceId } from "@multica/core/hooks";
+import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 import { useTheme } from "@multica/ui/components/common/theme-provider";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
@@ -49,7 +51,7 @@ const NODE_W = 248;
  * title would push its own text out of its box. Two lines of title is the
  * budget; longer titles clamp.
  */
-const NODE_H = 92;
+const NODE_H = 104;
 /** Column pitch and row pitch. Generous enough that edges read at 50% zoom. */
 const GAP_X = 96;
 const GAP_Y = 16;
@@ -85,6 +87,11 @@ interface MissionNodeData extends Record<string, unknown> {
   /** Tasks folded inside this one. 0 when there are none, or it is open. */
   foldedCount: number;
   onUnfold: (issueId: string) => void;
+  /** Workspace label for the status key, e.g. "In progress" not "in_progress". */
+  statusLabel: string;
+  /** Terminal and total below this unit. Both 0 when it has no children. */
+  done: number;
+  units: number;
 }
 
 /**
@@ -191,8 +198,19 @@ function stageStateOf(node: MissionNode, data: MissionResponse): StageState {
 }
 
 function MissionIssueNode({ data }: NodeProps<Node<MissionNodeData>>) {
-  const { node, onSelect, selected, isRoot, waitingReason, stageState, foldedCount, onUnfold } =
-    data;
+  const {
+    node,
+    onSelect,
+    selected,
+    isRoot,
+    waitingReason,
+    stageState,
+    foldedCount,
+    onUnfold,
+    statusLabel,
+    done,
+    units,
+  } = data;
   const reason = waitingReason ? REASON_ICON[waitingReason] : null;
   return (
     // A button, not a link. Clicking a unit on the canvas opens its context in
@@ -203,7 +221,7 @@ function MissionIssueNode({ data }: NodeProps<Node<MissionNodeData>>) {
       type="button"
       onClick={() => onSelect(node.id)}
       className={cn(
-        "flex h-[92px] w-[248px] cursor-pointer flex-col gap-1 overflow-hidden rounded-lg border bg-card px-3 py-2 text-left shadow-sm transition-colors hover:border-foreground/30",
+        "flex h-[104px] w-[248px] cursor-pointer flex-col gap-1 overflow-hidden rounded-lg border bg-card px-3 py-2 text-left shadow-sm transition-colors hover:border-foreground/30",
         isRoot && "border-primary/60 bg-primary/5",
         waitingReason && "border-amber-500/70",
         selected && "ring-2 ring-primary ring-offset-1 ring-offset-background",
@@ -263,6 +281,26 @@ function MissionIssueNode({ data }: NodeProps<Node<MissionNodeData>>) {
         {node.title}
       </span>
 
+      {/* Completion, on the card rather than only in the drawer. A leaf gets
+          nothing: 0/0 is not 0% done, it is a unit with nothing underneath,
+          and a full-width empty bar would read as "none of it is finished". */}
+      {units > 0 ? (
+        <span className="flex shrink-0 items-center gap-1.5">
+          <span className="h-1 flex-1 overflow-hidden rounded-full bg-muted">
+            <span
+              className={cn(
+                "block h-full rounded-full",
+                done === units ? "bg-emerald-500" : "bg-primary",
+              )}
+              style={{ width: `${Math.round((done / units) * 100)}%` }}
+            />
+          </span>
+          <span className="shrink-0 font-mono text-[9px] tabular-nums text-muted-foreground">
+            {done}/{units}
+          </span>
+        </span>
+      ) : null}
+
       <div className="flex shrink-0 items-center gap-1.5">
         {/* Who is on it. The canvas without this says where the work is and
             not who has it, which is half the question on a team whose units
@@ -278,7 +316,20 @@ function MissionIssueNode({ data }: NodeProps<Node<MissionNodeData>>) {
         ) : (
           <span className="size-4 rounded-full border border-dashed border-muted-foreground/40" />
         )}
-        <span className="truncate text-[10px] text-muted-foreground">{node.status}</span>
+        <span className="truncate text-[10px] text-muted-foreground">{statusLabel}</span>
+
+        {/* What is standing in the way, on the card. It was drawn as an edge
+            and only as an edge, which means you had to trace a line to learn
+            the one thing that decides whether this can start at all. */}
+        {node.blocked_by?.length ? (
+          <span
+            title={`Waiting on ${node.blocked_by.map((b) => b.identifier).join(", ")}`}
+            className="flex shrink-0 items-center gap-0.5 rounded-sm border border-rose-500/40 px-1 text-[9px] text-rose-600 dark:text-rose-400"
+          >
+            <Lock className="size-2.5" />
+            {node.blocked_by.length}
+          </span>
+        ) : null}
         {foldedCount > 0 ? (
           // A nested span rather than a nested button: a button inside a button
           // is invalid markup and React will say so. The stopPropagation is
@@ -330,6 +381,8 @@ function Canvas({
   onSelect: (issueId: string) => void;
 }) {
   const { resolvedTheme } = useTheme();
+  // One cached catalog for the canvas, never one lookup per node's render.
+  const { labelOf } = useIssueStatuses(useWorkspaceId());
   // Which tasks have been opened to show the tasks inside them.
   //
   // This is the whole of "subtask". A task that breaks down is still a task —
@@ -357,6 +410,34 @@ function Canvas({
     }
     return map;
   }, [data.waiting, data.with_lead, data.stalled]);
+
+  // Terminal and total below every unit, from the tree that is already here.
+  // No request: the whole subtree is in the payload, so a rollup is a walk over
+  // memory rather than a count the server has to be asked for.
+  const progress = useMemo(() => {
+    const childrenOf = new Map<string, MissionNode[]>();
+    for (const node of data.nodes) {
+      if (!node.parent_id) continue;
+      const list = childrenOf.get(node.parent_id) ?? [];
+      list.push(node);
+      childrenOf.set(node.parent_id, list);
+    }
+    const out = new Map<string, { done: number; units: number }>();
+    // Deepest first, so a parent's totals are ready when it is reached. The
+    // server returns breadth-first, so reversing is enough.
+    for (let i = data.nodes.length - 1; i >= 0; i -= 1) {
+      const node = data.nodes[i]!;
+      let done = 0;
+      let units = 0;
+      for (const child of childrenOf.get(node.id) ?? []) {
+        const below = out.get(child.id) ?? { done: 0, units: 0 };
+        units += 1 + below.units;
+        done += (child.terminal ? 1 : 0) + below.done;
+      }
+      out.set(node.id, { done, units });
+    }
+    return out;
+  }, [data.nodes]);
 
   const { nodes, edges } = useMemo(() => {
     // Everything except the inside of a folded task. Computed parent-first,
@@ -400,6 +481,9 @@ function Canvas({
         stageState: stageStateOf(node, data),
         foldedCount: folded.get(node.id) ?? 0,
         onUnfold: unfold,
+        statusLabel: labelOf(node.status),
+        done: progress.get(node.id)?.done ?? 0,
+        units: progress.get(node.id)?.units ?? 0,
       },
       draggable: false,
       connectable: false,
@@ -462,6 +546,9 @@ function Canvas({
     const known = new Set(visible.map((n) => n.id));
     for (const node of visible) {
       for (const blocker of node.blocked_by ?? []) {
+        // An outside blocker has no node to draw to. The card's count carries
+        // it, and the drawer names it — drawing an edge to nowhere would be
+        // worse than not drawing one.
         if (!known.has(blocker.issue_id)) continue;
         flowEdges.push({
           id: `blocks:${blocker.issue_id}->${node.id}`,
@@ -472,7 +559,7 @@ function Canvas({
           type: "smoothstep",
           deletable: false,
           focusable: false,
-          label: "blocks",
+          label: blocker.relation === "dependency" ? "waits on" : "blocks",
           labelStyle: { fontSize: 9, fill: "var(--color-rose-500)" },
           labelBgStyle: { fill: "var(--color-background)" },
           style: { stroke: "var(--color-rose-500)", strokeWidth: 1.25, strokeDasharray: "3 3" },
@@ -481,7 +568,7 @@ function Canvas({
     }
 
     return { nodes: flowNodes, edges: flowEdges };
-  }, [data, selectedId, onSelect, reasonByIssue, unfolded, unfold]);
+  }, [data, selectedId, onSelect, reasonByIssue, unfolded, unfold, labelOf, progress]);
 
   // The minimap is the only place a node's colour has to survive being three
   // pixels wide, so it says one thing: is anything waiting under here.

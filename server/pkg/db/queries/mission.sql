@@ -357,3 +357,67 @@ WHERE COALESCE(r.level, r.derived) = @level::text
   AND (NOT @orphans_only::boolean OR (r.level IS NOT NULL AND r.level <> r.derived))
   AND (sqlc.narg('campaign_id')::uuid IS NULL OR r.root_id = sqlc.narg('campaign_id')::uuid)
 ORDER BY i.last_activity_at DESC NULLS LAST, i.number DESC;
+
+-- name: ListMissionDependencies :many
+-- What blocks these units, from the dependency table rather than the barrier.
+--
+-- The barrier can only order SIBLINGS under one parent, so it cannot express
+-- "this task waits on a task in another mission, owned by another squad" — and
+-- that is the ordinary case the moment two teams share a release. issue_
+-- dependency is the product's own table for it (migration 034-era, type
+-- blocks/blocked_by/related) and it had no reader, no writer and no rows.
+--
+-- Both directions are read. The table stores a direction in `type`, and the
+-- same fact can be written from either end: A says "I am blocked_by B", or B
+-- says "I block A". A reader that honoured only one spelling would show half
+-- the dependencies in a workspace and look like it was working.
+--
+-- `related` is excluded: it is a cross-reference, not a wait.
+--
+-- The blocker is joined from `issue` with no workspace or subtree restriction
+-- ON PURPOSE. A blocker outside this tree is exactly the case this exists for,
+-- and hiding it would reproduce the barrier's limitation in the query that was
+-- written to escape it.
+SELECT
+    d.id,
+    d.type,
+    blocked.id                 AS blocked_issue_id,
+    blocker.id                 AS blocker_issue_id,
+    blocker.number             AS blocker_number,
+    blocker.title              AS blocker_title,
+    blocker.status             AS blocker_status,
+    blocker.assignee_type      AS blocker_assignee_type,
+    blocker.assignee_id        AS blocker_assignee_id,
+    blocker.parent_issue_id    AS blocker_parent_id
+FROM issue_dependency d
+-- 'blocked_by': issue_id is blocked by depends_on_issue_id.
+-- 'blocks':     issue_id blocks depends_on_issue_id, so the roles swap.
+JOIN issue blocked
+    ON blocked.id = CASE WHEN d.type = 'blocked_by' THEN d.issue_id ELSE d.depends_on_issue_id END
+JOIN issue blocker
+    ON blocker.id = CASE WHEN d.type = 'blocked_by' THEN d.depends_on_issue_id ELSE d.issue_id END
+WHERE d.type IN ('blocked_by', 'blocks')
+  AND blocked.id = ANY(@issue_ids::uuid[]);
+
+-- name: AddIssueDependency :one
+-- SPIKE: the write path this table never had.
+--
+-- Always stored as 'blocked_by' from the blocked unit's side, so the table has
+-- one spelling going forward even though the reader tolerates both. A unit
+-- cannot block itself, and the same pair is not recorded twice.
+INSERT INTO issue_dependency (issue_id, depends_on_issue_id, type)
+SELECT @issue_id, @depends_on_issue_id, 'blocked_by'
+WHERE @issue_id::uuid <> @depends_on_issue_id::uuid
+  AND NOT EXISTS (
+      SELECT 1 FROM issue_dependency existing
+      WHERE existing.issue_id = @issue_id
+        AND existing.depends_on_issue_id = @depends_on_issue_id
+        AND existing.type = 'blocked_by'
+  )
+RETURNING *;
+
+-- name: RemoveIssueDependency :exec
+DELETE FROM issue_dependency
+WHERE issue_id = @issue_id
+  AND depends_on_issue_id = @depends_on_issue_id
+  AND type = 'blocked_by';

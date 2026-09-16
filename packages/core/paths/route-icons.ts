@@ -50,7 +50,7 @@ export type NavLabelKey =
   | "chat"
   | "my_issues"
   | "issues"
-  | "missions"
+  | "campaigns"
   | "projects"
   | "autopilots"
   | "agents"
@@ -66,7 +66,7 @@ export type WorkspacePageKey =
   | "chat"
   | "myIssues"
   | "issues"
-  | "missions"
+  | "campaigns"
   | "projects"
   | "autopilots"
   | "agents"
@@ -94,8 +94,8 @@ export const WORKSPACE_PAGES: Record<WorkspacePageKey, WorkspacePage> = {
   chat: { segment: "chat", icon: "MessageSquare", navKey: "chat" },
   myIssues: { segment: "my-issues", icon: "CircleUser", navKey: "my_issues" },
   issues: { segment: "issues", icon: "ListTodo", navKey: "issues" },
-  // SPIKE (not upstream): the mission index.
-  missions: { segment: "missions", icon: "Waypoints", navKey: "missions" },
+  // SPIKE (not upstream): the ladder's board.
+  campaigns: { segment: "campaigns", icon: "Waypoints", navKey: "campaigns" },
   projects: { segment: "projects", icon: "FolderKanban", navKey: "projects" },
   autopilots: { segment: "autopilots", icon: "Zap", navKey: "autopilots" },
   agents: { segment: "agents", icon: "Bot", navKey: "agents" },
