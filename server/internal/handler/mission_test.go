@@ -503,3 +503,32 @@ func TestMissionBlockers_ImplicitStageBlocksNothing(t *testing.T) {
 		t.Errorf("blockers = %v, want none for an implicit stage", got)
 	}
 }
+
+// ── The vocabulary ──────────────────────────────────────────────────────────
+//
+// Campaign → Mission → Objective → Task. Only the last three are depths in this
+// tree; the campaign is Multica's project, an entity that already existed.
+
+func TestMissionLevel_TaskIsTheFloor(t *testing.T) {
+	// Three names against an unbounded tree. The rule that makes that work is
+	// that a task with children is still a task — a unit may task-organise
+	// further without becoming a new kind of thing. Without it the scheme needs
+	// a noun per depth and runs out at "sub-sub-task".
+	//
+	// This is a claim about the product, not a preference: dispatch never looks
+	// at depth or parentage, the stage barrier is computed per parent at every
+	// level, and a hand can be raised anywhere. Nothing changes below depth 2,
+	// so a fourth rung would name nothing.
+	for depth, want := range map[int32]string{
+		0: levelMission,
+		1: levelObjective,
+		2: levelTask,
+		3: levelTask,
+		4: levelTask,
+		5: levelTask,
+	} {
+		if got := missionLevel(depth); got != want {
+			t.Errorf("depth %d = %q, want %q", depth, got, want)
+		}
+	}
+}

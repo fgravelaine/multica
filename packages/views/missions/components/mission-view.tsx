@@ -132,6 +132,7 @@ export function MissionView({ issueId }: { issueId: string }) {
 }
 
 function MissionHeader({ data, issueHref }: { data: MissionResponse; issueHref: string }) {
+  const paths = useWorkspacePaths();
   const totals = useMemo(() => {
     let tokens = 0;
     let ticks = 0;
@@ -149,9 +150,35 @@ function MissionHeader({ data, issueHref }: { data: MissionResponse; issueHref: 
     return { tokens, ticks, metered };
   }, [data.nodes]);
 
+  const objectives = data.nodes.filter((n) => n.level === "objective").length;
+  const tasks = data.nodes.filter((n) => n.level === "task").length;
+
   return (
     <header className="mb-6 border-b pb-4">
-      <p className="text-caption uppercase tracking-wide text-muted-foreground">Mission</p>
+      {/* The rung above. A mission belongs to a campaign, which is Multica's
+          project — so the top of the ladder needed no new word, only saying.
+          An unattached mission says so rather than showing nothing, because
+          "no campaign" is a fact about the mission, not a missing value. */}
+      <p className="flex items-center gap-1.5 text-caption uppercase tracking-wide text-muted-foreground">
+        {data.campaign ? (
+          <>
+            {data.campaign.icon ? <span aria-hidden>{data.campaign.icon}</span> : null}
+            <a
+              href={paths.projectDetail(data.campaign.id)}
+              className="hover:text-foreground hover:underline"
+            >
+              {data.campaign.title}
+            </a>
+            <span aria-hidden className="text-muted-foreground/40">/</span>
+          </>
+        ) : (
+          <>
+            <span className="text-muted-foreground/60">No campaign</span>
+            <span aria-hidden className="text-muted-foreground/40">/</span>
+          </>
+        )}
+        <span>Mission</span>
+      </p>
       <h1 className="mt-1 text-xl font-semibold leading-tight">{data.root.title}</h1>
       <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-caption text-muted-foreground">
         {/* The issue page owns the goal, the description, the comments and the
@@ -159,7 +186,14 @@ function MissionHeader({ data, issueHref }: { data: MissionResponse; issueHref: 
         <a href={issueHref} className="font-medium text-foreground hover:underline">
           {data.root.identifier}
         </a>
-        <span>{data.nodes.length - 1} sub-issues</span>
+        {/* Counted by rung, not lumped as "sub-issues". Objectives are what
+            must be taken; tasks are what units are ordered to do — and knowing
+            three objectives carry forty tasks is a different fact from
+            "43 sub-issues". */}
+        <span>
+          {objectives} {objectives === 1 ? "objective" : "objectives"} · {tasks}{" "}
+          {tasks === 1 ? "task" : "tasks"}
+        </span>
         {totals.metered > 0 ? (
           <span>
             {formatTokens(totals.tokens)} tokens · ${(totals.ticks / COST_USD_TICKS_PER_USD).toFixed(2)}

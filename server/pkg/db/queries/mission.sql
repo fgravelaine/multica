@@ -159,6 +159,18 @@ ORDER BY al.issue_id, al.created_at DESC, al.id DESC;
 -- detail endpoint follows, applied one level up: a list that fans out is a list
 -- that gets slower the more work you do.
 
+-- name: GetMissionCampaign :one
+-- The campaign a mission belongs to.
+--
+-- Multica calls it a project and it is a real entity — which is why the naming
+-- ladder needs no fifth word invented for the top. A mission may have none;
+-- the caller renders that as "no campaign" rather than hiding the line, because
+-- an unattached mission is a fact worth seeing.
+SELECT p.id, p.title, p.icon, p.status
+FROM project p
+JOIN issue i ON i.project_id = p.id
+WHERE i.id = @issue_id;
+
 -- name: ListMissionRoots :many
 -- Every mission in the workspace.
 --

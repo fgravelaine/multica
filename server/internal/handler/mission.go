@@ -92,6 +92,25 @@ type MissionNode struct {
 	// view neither converts nor recomputes it.
 	Usage *MissionNodeUsage `json:"usage,omitempty"`
 
+	// Level is what this unit IS, in the mission-command sense.
+	//
+	//   mission   — task + purpose. Carries the intent and the end state. One
+	//               per tree, and the only one a human writes.
+	//   objective — what must be taken and held for the mission to succeed.
+	//               Decisive: you can tell whether you hold it.
+	//   task      — what one unit is ordered to do.
+	//
+	// Depth 0 and 1 name themselves; everything below is a task. A unit may
+	// task-organise further, so A TASK WITH CHILDREN IS STILL A TASK — which is
+	// what keeps a three-word vocabulary finite against an unbounded tree. The
+	// alternative, a noun per depth, runs out at "sub-sub-task".
+	//
+	// A squad never appears here. In doctrine a squad is a unit that RECEIVES a
+	// task: squad is who, objective is what. Naming a level after its assignee
+	// would also be a lie the moment someone reassigns it, since assignee_type
+	// is editable at any depth.
+	Level string `json:"level"`
+
 	// BlockedBy names the units this one is actually waiting on, when the thing
 	// holding it is another unit rather than a person.
 	//
@@ -143,6 +162,24 @@ type MissionBlocker struct {
 }
 
 const blockerStageBarrier = "stage_barrier"
+
+const (
+	levelMission   = "mission"
+	levelObjective = "objective"
+	levelTask      = "task"
+)
+
+// missionLevel maps depth to what the unit is. See MissionNode.Level.
+func missionLevel(depth int32) string {
+	switch depth {
+	case 0:
+		return levelMission
+	case 1:
+		return levelObjective
+	default:
+		return levelTask
+	}
+}
 
 // missionBlockers names, for each unit above the frontier, the open units of
 // the frontier stage.
@@ -335,7 +372,10 @@ type MissionLeadContest struct {
 }
 
 type MissionResponse struct {
-	Root    MissionNode          `json:"root"`
+	// Campaign is the rung above the mission. Absent when the mission belongs
+	// to none, which the client states rather than hides.
+	Campaign *MissionCampaign     `json:"campaign,omitempty"`
+	Root     MissionNode          `json:"root"`
 	Nodes   []MissionNode        `json:"nodes"`
 	Stages  []MissionStage       `json:"stages"`
 	Waiting []MissionWaitingUnit `json:"waiting"`
@@ -604,6 +644,7 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 			StatusCategory: issuestatus.WireCategory(row.Status, category),
 			Priority:       row.Priority,
 			Depth:          row.Depth,
+			Level:          missionLevel(row.Depth),
 			Terminal:       isTerminalChildStatus(effective),
 			Usage:          usageByIssue[id],
 		}
@@ -676,6 +717,21 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 		return waiting[i].WaitedSecs > waiting[j].WaitedSecs
 	})
 
+	// The campaign. One row, on the root only — an objective and a task belong
+	// to their mission, not directly to a campaign. pgx returns ErrNoRows when
+	// the mission is unattached, which is not an error: it is the answer.
+	var campaign *MissionCampaign
+	if row, err := h.Queries.GetMissionCampaign(r.Context(), root.ID); err == nil {
+		campaign = &MissionCampaign{
+			ID:     uuidToString(row.ID),
+			Title:  row.Title,
+			Status: row.Status,
+		}
+		if row.Icon.Valid {
+			campaign.Icon = row.Icon.String
+		}
+	}
+
 	stages, unstagedIgnored := missionStages(nodes, uuidToString(root.ID))
 	for id, blockers := range missionBlockers(nodes, stages, uuidToString(root.ID)) {
 		if i, ok := nodeIndex[id]; ok {
@@ -714,6 +770,7 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 	markWaitingBelow(nodes, nodeIndex, append(append(append([]MissionWaitingUnit{}, waiting...), withLead...), stalled...))
 
 	resp := MissionResponse{
+		Campaign:           campaign,
 		Root:               nodes[0],
 		Nodes:              nodes,
 		Stages:             stages,
@@ -1141,6 +1198,19 @@ type MissionSummary struct {
 
 	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
 	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+// MissionCampaign is the campaign a mission belongs to.
+//
+// Multica calls it a project. The naming ladder is Campaign → Mission →
+// Objective → Task, and only the last three are depths in the issue tree — the
+// top rung is an entity that already exists, which is why nothing had to be
+// invented for it.
+type MissionCampaign struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Icon   string `json:"icon,omitempty"`
+	Status string `json:"status"`
 }
 
 type MissionListResponse struct {

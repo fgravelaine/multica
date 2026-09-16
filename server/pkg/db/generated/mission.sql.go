@@ -11,6 +11,44 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const getMissionCampaign = `-- name: GetMissionCampaign :one
+
+SELECT p.id, p.title, p.icon, p.status
+FROM project p
+JOIN issue i ON i.project_id = p.id
+WHERE i.id = $1
+`
+
+type GetMissionCampaignRow struct {
+	ID     pgtype.UUID `json:"id"`
+	Title  string      `json:"title"`
+	Icon   pgtype.Text `json:"icon"`
+	Status string      `json:"status"`
+}
+
+// ── The index ───────────────────────────────────────────────────────────────
+//
+// Two queries for the whole list, not one per mission. The same rule the
+// detail endpoint follows, applied one level up: a list that fans out is a list
+// that gets slower the more work you do.
+// The campaign a mission belongs to.
+//
+// Multica calls it a project and it is a real entity — which is why the naming
+// ladder needs no fifth word invented for the top. A mission may have none;
+// the caller renders that as "no campaign" rather than hiding the line, because
+// an unattached mission is a fact worth seeing.
+func (q *Queries) GetMissionCampaign(ctx context.Context, issueID pgtype.UUID) (GetMissionCampaignRow, error) {
+	row := q.db.QueryRow(ctx, getMissionCampaign, issueID)
+	var i GetMissionCampaignRow
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Icon,
+		&i.Status,
+	)
+	return i, err
+}
+
 const listMissionIssueUsage = `-- name: ListMissionIssueUsage :many
 SELECT
     atq.issue_id,
@@ -341,7 +379,6 @@ func (q *Queries) ListMissionRollups(ctx context.Context, arg ListMissionRollups
 }
 
 const listMissionRoots = `-- name: ListMissionRoots :many
-
 SELECT
     i.id,
     i.number,
@@ -365,11 +402,6 @@ type ListMissionRootsRow struct {
 	LastActivityAt pgtype.Timestamptz `json:"last_activity_at"`
 }
 
-// ── The index ───────────────────────────────────────────────────────────────
-//
-// Two queries for the whole list, not one per mission. The same rule the
-// detail endpoint follows, applied one level up: a list that fans out is a list
-// that gets slower the more work you do.
 // Every mission in the workspace.
 //
 // A mission is not an entity in this product. It is a top-level issue that has

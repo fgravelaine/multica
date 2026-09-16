@@ -17,7 +17,7 @@
 // lines (a leaf takes the next row; a parent centres on its children) and a
 // second dependency would buy nothing.
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Background,
   BackgroundVariant,
@@ -54,6 +54,13 @@ const NODE_H = 92;
 const GAP_X = 96;
 const GAP_Y = 16;
 
+/**
+ * The ladder, in order. Campaign is deliberately absent: it is not a depth in
+ * this tree, it is the project the mission belongs to, and the header states
+ * it rather than the canvas drawing a column for it.
+ */
+const LEVEL_COLUMNS = ["Mission", "Objectives", "Tasks"] as const;
+
 /** How a node's stage stands, so the chip can carry the barrier's own words. */
 type StageState = "closed" | "frontier" | "ahead" | "none";
 
@@ -72,6 +79,9 @@ interface MissionNodeData extends Record<string, unknown> {
    */
   waitingReason: MissionWaitingReason | null;
   stageState: StageState;
+  /** Tasks folded inside this one. 0 when there are none, or it is open. */
+  foldedCount: number;
+  onUnfold: (issueId: string) => void;
 }
 
 /**
@@ -118,9 +128,12 @@ const REASON_ICON: Record<
  * children. Siblings therefore stay in stage order top to bottom, which is what
  * makes a barrier visible as a horizontal line rather than a fact you look up.
  */
-function layout(data: MissionResponse): Map<string, { x: number; y: number }> {
+function layout(
+  data: MissionResponse,
+  visible: MissionNode[],
+): Map<string, { x: number; y: number }> {
   const childrenOf = new Map<string, MissionNode[]>();
-  for (const node of data.nodes) {
+  for (const node of visible) {
     if (!node.parent_id) continue;
     const list = childrenOf.get(node.parent_id) ?? [];
     list.push(node);
@@ -175,7 +188,8 @@ function stageStateOf(node: MissionNode, data: MissionResponse): StageState {
 }
 
 function MissionIssueNode({ data }: NodeProps<Node<MissionNodeData>>) {
-  const { node, onSelect, selected, isRoot, waitingReason, stageState } = data;
+  const { node, onSelect, selected, isRoot, waitingReason, stageState, foldedCount, onUnfold } =
+    data;
   const reason = waitingReason ? REASON_ICON[waitingReason] : null;
   return (
     // A button, not a link. Clicking a unit on the canvas opens its context in
@@ -262,12 +276,46 @@ function MissionIssueNode({ data }: NodeProps<Node<MissionNodeData>>) {
           <span className="size-4 rounded-full border border-dashed border-muted-foreground/40" />
         )}
         <span className="truncate text-[10px] text-muted-foreground">{node.status}</span>
+        {foldedCount > 0 ? (
+          // A nested span rather than a nested button: a button inside a button
+          // is invalid markup and React will say so. The stopPropagation is
+          // what keeps unfolding from also opening the drawer.
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={(event) => {
+              event.stopPropagation();
+              onUnfold(node.id);
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.stopPropagation();
+              event.preventDefault();
+              onUnfold(node.id);
+            }}
+            title={`${foldedCount} tasks inside this one`}
+            className="ml-auto shrink-0 cursor-pointer rounded-sm border px-1 text-[9px] text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+          >
+            +{foldedCount}
+          </span>
+        ) : null}
       </div>
     </button>
   );
 }
 
-const nodeTypes = { missionIssue: MissionIssueNode };
+function LevelHeaderNode({ data }: NodeProps<Node<{ label: string }>>) {
+  return (
+    <div
+      style={{ width: NODE_W }}
+      className="select-none pl-1 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/50"
+    >
+      {data.label}
+    </div>
+  );
+}
+
+const nodeTypes = { missionIssue: MissionIssueNode, levelHeader: LevelHeaderNode };
 
 function Canvas({
   data,
@@ -279,6 +327,22 @@ function Canvas({
   onSelect: (issueId: string) => void;
 }) {
   const { resolvedTheme } = useTheme();
+  // Which tasks have been opened to show the tasks inside them.
+  //
+  // This is the whole of "subtask". A task that breaks down is still a task —
+  // nothing in the product changes below depth 2 — so the difference is not a
+  // rank, it is what the mission tracks. "Write it" is what a unit is ordered
+  // to do and reports on; its steps are the unit's own business, and the
+  // canvas keeps them folded until you ask.
+  const [unfolded, setUnfolded] = useState<Set<string>>(() => new Set());
+  const unfold = useCallback((id: string) => {
+    setUnfolded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   // One map, not two sets. The reason comes from the unit the server already
   // classified — the canvas does not re-derive it, so it cannot drift from what
@@ -292,8 +356,27 @@ function Canvas({
   }, [data.waiting, data.with_lead, data.stalled]);
 
   const { nodes, edges } = useMemo(() => {
-    const position = layout(data);
-    const flowNodes: Node<MissionNodeData>[] = data.nodes.map((node) => ({
+    // Everything except the inside of a folded task. Computed parent-first,
+    // which the server's breadth-first ordering guarantees, so folding a task
+    // hides everything beneath it and not just its first row.
+    const hidden = new Set<string>();
+    const folded = new Map<string, number>();
+    for (const node of data.nodes) {
+      if (!node.parent_id) continue;
+      if (hidden.has(node.parent_id)) {
+        hidden.add(node.id);
+        continue;
+      }
+      const parent = data.nodes.find((n) => n.id === node.parent_id);
+      if (parent?.level === "task" && !unfolded.has(parent.id)) {
+        hidden.add(node.id);
+        folded.set(parent.id, (folded.get(parent.id) ?? 0) + 1);
+      }
+    }
+    const visible = data.nodes.filter((n) => !hidden.has(n.id));
+
+    const position = layout(data, visible);
+    const flowNodes: Node<MissionNodeData>[] = visible.map((node) => ({
       id: node.id,
       type: "missionIssue",
       position: position.get(node.id) ?? { x: 0, y: 0 },
@@ -310,14 +393,16 @@ function Canvas({
         isRoot: node.id === data.root.id,
         waitingReason: reasonByIssue.get(node.id) ?? null,
         stageState: stageStateOf(node, data),
+        foldedCount: folded.get(node.id) ?? 0,
+        onUnfold: unfold,
       },
       draggable: false,
       connectable: false,
       deletable: false,
     }));
 
-    const flowEdges: Edge[] = data.nodes
-      .filter((node) => node.parent_id)
+    const flowEdges: Edge[] = visible
+      .filter((node) => node.parent_id && !hidden.has(node.parent_id))
       .map((node) => ({
         id: `${node.parent_id}->${node.id}`,
         source: node.parent_id!,
@@ -333,6 +418,34 @@ function Canvas({
           : { strokeWidth: 1.25 },
       }));
 
+    // The ladder, written above the columns the layout already produces. Depth
+    // is the x axis, so a column IS a rung. Named up to the deepest column that
+    // exists — a mission with no tasks does not advertise an empty Tasks
+    // column — and the last name covers every column beyond it, because depth
+    // 3 and 4 are tasks too.
+    const maxDepth = visible.reduce((m, n) => Math.max(m, n.depth), 0);
+    let headerY = Infinity;
+    for (const p of position.values()) headerY = Math.min(headerY, p.y);
+    if (!Number.isFinite(headerY)) headerY = 0;
+    for (let depth = 0; depth <= maxDepth; depth += 1) {
+      const label = LEVEL_COLUMNS[Math.min(depth, LEVEL_COLUMNS.length - 1)]!;
+      // One header per column: past the last name, the column is more tasks
+      // and repeating the word would be noise.
+      if (depth >= LEVEL_COLUMNS.length) break;
+      flowNodes.push({
+        id: `level:${depth}`,
+        type: "levelHeader",
+        position: { x: depth * (NODE_W + GAP_X), y: headerY - 34 },
+        data: { label } as never,
+        draggable: false,
+        selectable: false,
+        connectable: false,
+        deletable: false,
+        width: NODE_W,
+        height: 18,
+      } as never);
+    }
+
     // The barrier, drawn. A parent→child edge says "this is part of that"; a
     // blocker edge says "this cannot start until that finishes", and they are
     // different claims that must not look alike — so these are rose, dashed,
@@ -341,8 +454,8 @@ function Canvas({
     // Bounded by the server: only the frontier stage blocks, so this is
     // (open units in the frontier) × (units above it), never the transitive
     // closure of the whole tree.
-    const known = new Set(data.nodes.map((n) => n.id));
-    for (const node of data.nodes) {
+    const known = new Set(visible.map((n) => n.id));
+    for (const node of visible) {
       for (const blocker of node.blocked_by ?? []) {
         if (!known.has(blocker.issue_id)) continue;
         flowEdges.push({
@@ -363,14 +476,17 @@ function Canvas({
     }
 
     return { nodes: flowNodes, edges: flowEdges };
-  }, [data, selectedId, onSelect, reasonByIssue]);
+  }, [data, selectedId, onSelect, reasonByIssue, unfolded, unfold]);
 
   // The minimap is the only place a node's colour has to survive being three
   // pixels wide, so it says one thing: is anything waiting under here.
-  const minimapColor = useCallback(
-    (node: Node) => ((node.data as MissionNodeData).node.waiting_below ? "#f59e0b" : "#71717a"),
-    [],
-  );
+  const minimapColor = useCallback((node: Node) => {
+    // Not every node is a unit: the column headers are nodes too, so that they
+    // pan and zoom with the columns they label. They have no unit to colour.
+    const unit = (node.data as Partial<MissionNodeData>).node;
+    if (!unit) return "transparent";
+    return unit.waiting_below ? "#f59e0b" : "#71717a";
+  }, []);
 
   return (
     <ReactFlow

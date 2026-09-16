@@ -24,6 +24,20 @@ export interface MissionNodeUsage {
   task_count: number;
 }
 
+/**
+ * What a unit IS, in the mission-command sense. The ladder is
+ * Campaign → Mission → Objective → Task, and only these three are depths in
+ * the issue tree — the campaign is Multica's `project`, an entity that already
+ * exists.
+ *
+ * There is no `subtask`. Nothing in the product changes below depth 2:
+ * dispatch never looks at depth or parentage, the stage barrier is computed
+ * per parent at every level, and a hand can be raised anywhere. A fifth rung
+ * would name nothing. A task inside a task is still a task — `subtask` is a
+ * relation, and the view treats it as one by collapsing it.
+ */
+export type MissionLevel = "mission" | "objective" | "task";
+
 export interface MissionNode {
   id: string;
   parent_id: string | null;
@@ -38,6 +52,8 @@ export interface MissionNode {
   /** null for a child that carries no stage. */
   stage: number | null;
   depth: number;
+  /** Mission at depth 0, objective at 1, task below. See MissionLevel. */
+  level: MissionLevel;
   terminal: boolean;
   /** True when this node, or anything beneath it, is in the waiting list. */
   waiting_below: boolean;
@@ -167,7 +183,17 @@ export interface MissionLeadContest {
   still_open: number;
 }
 
+/** The rung above the mission. Multica calls it a project. */
+export interface MissionCampaign {
+  id: string;
+  title: string;
+  icon?: string;
+  status: string;
+}
+
 export interface MissionResponse {
+  /** Absent when the mission belongs to no campaign — stated, not hidden. */
+  campaign?: MissionCampaign;
   root: MissionNode;
   nodes: MissionNode[];
   stages: MissionStage[];

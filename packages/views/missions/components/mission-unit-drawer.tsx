@@ -16,6 +16,7 @@ import { useMemo } from "react";
 import { ArrowUpRight, Ban, Hand, Layers, Play, Wallet } from "lucide-react";
 import type {
   MissionHand,
+  MissionLevel,
   MissionNode,
   MissionResponse,
   MissionWaitingUnit,
@@ -31,6 +32,18 @@ import {
 } from "@multica/ui/components/ui/sheet";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
+
+/**
+ * What each rung obliges, in the mission-command sense the names come from.
+ *
+ * There is no `subtask` line because there is no subtask rung: a task inside a
+ * task is still a task, and nothing in the product changes below depth 2.
+ */
+const LEVEL_MEANS: Record<MissionLevel, string> = {
+  mission: "carries the intent and the end state. Only a human writes one.",
+  objective: "must be taken and held for the mission to succeed. You can tell whether you hold it.",
+  task: "what one unit is ordered to do.",
+};
 
 /** 1e-10 USD per tick — server/pkg/agent.CostUSDTicksPerUSD. */
 const COST_USD_TICKS_PER_USD = 10_000_000_000;
@@ -121,6 +134,16 @@ export function MissionUnitDrawer({
                 {node.identifier}
               </span>
               <SheetTitle className="text-left text-base leading-snug">{node.title}</SheetTitle>
+              {/* What it IS, and what that obliges. The rung is not decoration:
+                  it says who may decide here, which is the whole reason the
+                  vocabulary exists. */}
+              <p className="text-caption text-muted-foreground">
+                <span className="font-medium uppercase tracking-wide text-foreground">
+                  {node.level}
+                </span>
+                {" — "}
+                {LEVEL_MEANS[node.level]}
+              </p>
               <SheetDescription className="sr-only">
                 Read-only context for this unit of the mission.
               </SheetDescription>
@@ -154,11 +177,22 @@ export function MissionUnitDrawer({
                 <Row label="Depth">
                   {node.depth === 0 ? "the mission root" : `${node.depth} below the root`}
                 </Row>
-                <Row label="Children">
+                <Row label={node.level === "task" ? "Breaks into" : "Children"}>
                   {children.length === 0 ? (
                     <span className="text-muted-foreground">none</span>
                   ) : (
-                    `${children.filter((c) => c.terminal).length}/${children.length} done`
+                    <>
+                      {children.filter((c) => c.terminal).length}/{children.length} done
+                      {/* The honest answer to "is this a subtask?". A task that
+                          breaks down is still a task; the canvas keeps its
+                          pieces folded because they are the unit's own
+                          business, not the mission's. */}
+                      {node.level === "task" ? (
+                        <span className="ml-2 text-muted-foreground">
+                          still tasks — folded on the canvas
+                        </span>
+                      ) : null}
+                    </>
                   )}
                 </Row>
               </Section>

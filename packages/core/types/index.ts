@@ -338,6 +338,8 @@ export type {
   MissionNode,
   MissionNodeUsage,
   MissionNodeRun,
+  MissionLevel,
+  MissionCampaign,
   MissionBlocker,
   MissionStage,
   MissionHand,
