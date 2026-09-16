@@ -515,10 +515,15 @@ func TestMissionLevel_TaskIsTheFloor(t *testing.T) {
 	// further without becoming a new kind of thing. Without it the scheme needs
 	// a noun per depth and runs out at "sub-sub-task".
 	//
-	// This is a claim about the product, not a preference: dispatch never looks
-	// at depth or parentage, the stage barrier is computed per parent at every
-	// level, and a hand can be raised anywhere. Nothing changes below depth 2,
-	// so a fourth rung would name nothing.
+	// The floor is the one boundary with a hard argument behind it: dispatch
+	// never looks at depth or parentage, the stage barrier is computed per
+	// parent at every level, and a hand can be raised anywhere.
+	//
+	// That argument is honest enough to cut both ways, so say so here: it also
+	// means NOTHING distinguishes an objective from a task in the server. The
+	// objective rung is a writing discipline people keep, not a rule this code
+	// enforces — see MissionNode.Level. Only the floor is load-bearing, which
+	// is why only the floor is pinned by a test.
 	for depth, want := range map[int32]string{
 		0: levelMission,
 		1: levelObjective,

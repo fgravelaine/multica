@@ -25,16 +25,21 @@ export interface MissionNodeUsage {
 }
 
 /**
- * What a unit IS, in the mission-command sense. The ladder is
- * Campaign → Mission → Objective → Task, and only these three are depths in
- * the issue tree — the campaign is Multica's `project`, an entity that already
- * exists.
+ * What a unit IS. The ladder is Campaign → Mission → Objective → Task, and only
+ * the last three are depths in the issue tree — the campaign is Multica's
+ * `project`, an entity that already exists.
  *
- * There is no `subtask`. Nothing in the product changes below depth 2:
- * dispatch never looks at depth or parentage, the stage barrier is computed
- * per parent at every level, and a hand can be raised anywhere. A fifth rung
- * would name nothing. A task inside a task is still a task — `subtask` is a
- * relation, and the view treats it as one by collapsing it.
+ * The words are borrowed from military usage; the ORDERING is local, not
+ * doctrinal. Exactly one boundary is enforced by the product (campaign/mission,
+ * which are different tables). `objective` vs `task` is a writing discipline —
+ * no code keys on depth. The full accounting is on MissionNode.Level, server
+ * side; read it before building behaviour on this field.
+ *
+ * There is no `subtask`, and THAT is backed: dispatch never looks at depth or
+ * parentage, the barrier is per parent at every level, and a hand can be raised
+ * anywhere, so a fourth rung would name nothing. A task inside a task is still
+ * a task — `subtask` is a relation, and the view treats it as one by folding
+ * it.
  */
 export type MissionLevel = "mission" | "objective" | "task";
 

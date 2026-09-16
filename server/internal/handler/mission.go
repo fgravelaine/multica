@@ -92,23 +92,44 @@ type MissionNode struct {
 	// view neither converts nor recomputes it.
 	Usage *MissionNodeUsage `json:"usage,omitempty"`
 
-	// Level is what this unit IS, in the mission-command sense.
+	// Level is what this unit IS.
 	//
-	//   mission   — task + purpose. Carries the intent and the end state. One
-	//               per tree, and the only one a human writes.
+	//   mission   — task + purpose. Carries the intent and the end state.
 	//   objective — what must be taken and held for the mission to succeed.
 	//               Decisive: you can tell whether you hold it.
 	//   task      — what one unit is ordered to do.
 	//
-	// Depth 0 and 1 name themselves; everything below is a task. A unit may
-	// task-organise further, so A TASK WITH CHILDREN IS STILL A TASK — which is
-	// what keeps a three-word vocabulary finite against an unbounded tree. The
-	// alternative, a noun per depth, runs out at "sub-sub-task".
+	// READ THIS BEFORE BUILDING ON IT. The words are borrowed from military
+	// usage, where each is precise about what a thing obliges. The ORDERING is
+	// not — doctrine does not rank them. A squad has a mission; an objective is
+	// assigned at any echelon; doctrine's hierarchy is units, not work items.
+	// The ladder is a local convention and has to earn its place on what it does
+	// here, not on borrowed authority.
 	//
-	// A squad never appears here. In doctrine a squad is a unit that RECEIVES a
-	// task: squad is who, objective is what. Naming a level after its assignee
-	// would also be a lie the moment someone reassigns it, since assignee_type
-	// is editable at any depth.
+	// What it earns, boundary by boundary:
+	//
+	//   campaign/mission   REAL. Different tables — project and issue.
+	//   mission/objective  SHAPE ONLY. A root is parent_issue_id IS NULL, so it
+	//                      has no parent to wake. Nothing else differs.
+	//   objective/task     NOTHING. No code anywhere keys on depth.
+	//
+	// So objective/task is a WRITING DISCIPLINE, not a rule this server keeps:
+	// a title at depth 1 has to answer "what does this promise, and can you tell
+	// whether you hold it?". That is worth having — it is how "Empty state" was
+	// caught sitting where an objective belongs — but people enforce it, not
+	// this field. Do not add behaviour keyed on Level without first giving the
+	// boundary a real consequence.
+	//
+	// The FLOOR is the one part with a hard argument: a task with children is
+	// still a task, because dispatch ignores depth and parentage, the barrier is
+	// per parent at every level, and a hand can be raised anywhere — so a fourth
+	// rung would name nothing. That same argument is why this comment claims no
+	// more for objective than it can carry.
+	//
+	// A squad never appears here: a squad RECEIVES a task. Squad is who,
+	// objective is what — and naming a level after its assignee would be a lie
+	// the moment someone reassigns it, since assignee_type is editable at any
+	// depth.
 	Level string `json:"level"`
 
 	// BlockedBy names the units this one is actually waiting on, when the thing
@@ -376,9 +397,9 @@ type MissionResponse struct {
 	// to none, which the client states rather than hides.
 	Campaign *MissionCampaign     `json:"campaign,omitempty"`
 	Root     MissionNode          `json:"root"`
-	Nodes   []MissionNode        `json:"nodes"`
-	Stages  []MissionStage       `json:"stages"`
-	Waiting []MissionWaitingUnit `json:"waiting"`
+	Nodes    []MissionNode        `json:"nodes"`
+	Stages   []MissionStage       `json:"stages"`
+	Waiting  []MissionWaitingUnit `json:"waiting"`
 	// WithLead is the half of the raised hands that is NOT on the human. A hand
 	// addressed to a squad leader is out of the primary list by construction —
 	// that is the entire point of a recipient, and leaving it in would mean the
@@ -770,12 +791,12 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 	markWaitingBelow(nodes, nodeIndex, append(append(append([]MissionWaitingUnit{}, waiting...), withLead...), stalled...))
 
 	resp := MissionResponse{
-		Campaign:           campaign,
-		Root:               nodes[0],
-		Nodes:              nodes,
-		Stages:             stages,
-		Waiting:            waiting,
-		WithLead:           withLead,
+		Campaign: campaign,
+		Root:     nodes[0],
+		Nodes:    nodes,
+		Stages:   stages,
+		Waiting:  waiting,
+		WithLead: withLead,
 		Autonomy: MissionAutonomy{
 			Total:          int(counts.Total),
 			ReachedHuman:   int(counts.ReachedHuman),
@@ -784,7 +805,7 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 			SettledByHuman: int(counts.SettledByHuman),
 			StillOpen:      int(counts.StillOpen),
 		},
-		Leads: leads,
+		Leads:              leads,
 		Stalled:            stalled,
 		Referentials:       missionReferentials(allHands, referentialLabels),
 		ReferentialStandIn: missionReferentialStandIn,
