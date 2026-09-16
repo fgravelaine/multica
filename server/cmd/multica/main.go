@@ -84,6 +84,10 @@ func init() {
 	// SPIKE: the raised hand, and the vocabulary it names.
 	rootCmd.AddCommand(handCmd)
 	rootCmd.AddCommand(referentialCmd)
+	// SPIKE: the write half of the ladder — declaring a rung, and declaring a
+	// wait that stage ordering cannot reach.
+	rootCmd.AddCommand(levelCmd)
+	rootCmd.AddCommand(waitsOnCmd)
 	rootCmd.AddCommand(chatCmd)
 	rootCmd.AddCommand(daemonCmd)
 	rootCmd.AddCommand(runtimeCmd)

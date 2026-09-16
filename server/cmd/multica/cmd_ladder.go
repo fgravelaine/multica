@@ -1,0 +1,149 @@
+// SPIKE (not upstream): `multica level` and `multica waits-on`.
+//
+// The write half of the ladder. Both endpoints existed with no way to reach
+// them but curl, which meant an agent — the thing that actually creates work
+// mid-run — could not declare what it had made or what it was stuck behind.
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/spf13/cobra"
+
+	"github.com/multica-ai/multica/server/internal/cli"
+)
+
+var ladderRungs = []string{"campaign", "mission", "objective", "task", "step"}
+
+// ── The rung ────────────────────────────────────────────────────────────────
+
+var levelCmd = &cobra.Command{
+	Use:   "level <issue> [rung]",
+	Short: "Declare what a unit is meant to be",
+	Long: "Campaign → Mission → Objective → Task → Step.\n\n" +
+		"Undeclared, a unit takes its rung from how deep it sits. Declaring is\n" +
+		"how a unit can DISAGREE with its own parentage — an objective you\n" +
+		"started on its own, with no mission over it yet. That disagreement is\n" +
+		"the only thing that makes such a unit findable: undeclared, it has no\n" +
+		"parent, so it reads as a campaign and looks exactly like one.\n\n" +
+		"Declaring is not a claim about where it sits. It is a claim about what\n" +
+		"it is FOR, and the board reports the two not matching rather than\n" +
+		"quietly reconciling them.\n\n" +
+		"Pass no rung to print the current one; pass `none` to undeclare.\n\n" +
+		"Examples:\n" +
+		"  multica level SPIK-24 objective\n" +
+		"  multica level SPIK-24 none",
+	Args: cobra.RangeArgs(1, 2),
+	RunE: runLevel,
+}
+
+func runLevel(cmd *cobra.Command, args []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+
+	if len(args) == 1 {
+		var issue map[string]any
+		if err := client.GetJSON(ctx, "/api/issues/"+args[0], &issue); err != nil {
+			return fmt.Errorf("read issue: %w", err)
+		}
+		if level := strVal(issue, "level"); level != "" {
+			fmt.Println(level)
+			return nil
+		}
+		// Not an error, and worth saying in full: nothing is wrong with a unit
+		// that has never been declared, and its rung is still knowable.
+		fmt.Fprintln(os.Stderr, "Undeclared — its rung comes from how deep it sits.")
+		return nil
+	}
+
+	rung := strings.ToLower(strings.TrimSpace(args[1]))
+	body := map[string]any{"level": rung}
+	if rung == "none" || rung == "null" {
+		body["level"] = nil
+	} else if !contains(ladderRungs, rung) {
+		return fmt.Errorf("unknown rung %q: one of %s, or `none` to undeclare",
+			rung, strings.Join(ladderRungs, ", "))
+	}
+
+	var out map[string]any
+	if err := client.PutJSON(ctx, "/api/issues/"+args[0]+"/level", body, &out); err != nil {
+		return fmt.Errorf("set level: %w", err)
+	}
+	if body["level"] == nil {
+		fmt.Fprintf(os.Stderr, "%s is undeclared again.\n", args[0])
+		return nil
+	}
+	// "a objective" reads as a typo in a tool an agent will print verbatim.
+	article := "a"
+	if strings.ContainsRune("aeiou", rune(rung[0])) {
+		article = "an"
+	}
+	fmt.Fprintf(os.Stderr, "%s is %s %s.\n", args[0], article, rung)
+	return nil
+}
+
+// ── The wait ────────────────────────────────────────────────────────────────
+
+var waitsOnCmd = &cobra.Command{
+	Use:   "waits-on <issue> <blocker>",
+	Short: "Declare that a unit cannot start until another finishes",
+	Long: "For the wait that stage ordering cannot express.\n\n" +
+		"Stages order SIBLINGS under one parent. They cannot say that this unit\n" +
+		"waits on something in another mission, another campaign, or another\n" +
+		"squad's tree — which is the ordinary case the moment two teams share a\n" +
+		"release. This is that link, and the blocker may be anywhere.\n\n" +
+		"No cycle check, on purpose: two units each waiting on the other is a\n" +
+		"real thing a team does to itself, and it is better seen than refused.\n\n" +
+		"Examples:\n" +
+		"  multica waits-on SPIK-18 SPIK-25\n" +
+		"  multica waits-on SPIK-18 SPIK-25 --remove",
+	Args: cobra.ExactArgs(2),
+	RunE: runWaitsOn,
+}
+
+func runWaitsOn(cmd *cobra.Command, args []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+
+	body := map[string]any{"depends_on": args[1]}
+	path := "/api/issues/" + args[0] + "/dependencies"
+
+	if remove, _ := cmd.Flags().GetBool("remove"); remove {
+		if err := client.DeleteJSONWithBody(ctx, path, body); err != nil {
+			return fmt.Errorf("remove dependency: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "%s no longer waits on %s.\n", args[0], args[1])
+		return nil
+	}
+
+	var out map[string]any
+	if err := client.PostJSON(ctx, path, body, &out); err != nil {
+		return fmt.Errorf("add dependency: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "%s waits on %s.\n", args[0], args[1])
+	return nil
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func init() {
+	waitsOnCmd.Flags().Bool("remove", false, "Drop the wait instead of declaring it")
+}

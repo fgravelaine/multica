@@ -1318,9 +1318,9 @@ func (s *TaskService) enqueueIssueTaskWithCommentPlan(ctx context.Context, issue
 		ID:      dbid.NewV7(),
 		AgentID: issue.AssigneeID,
 		// SPIKE: provisional when RoutingPolicy is set — see taskRuntimeID above.
-		RuntimeID:     taskRuntimeID,
-		RoutingPolicy: routingPolicy,
-		IssueID:       issue.ID,
+		RuntimeID:            taskRuntimeID,
+		RoutingPolicy:        routingPolicy,
+		IssueID:              issue.ID,
 		Priority:             priorityToInt(issue.Priority),
 		TriggerCommentID:     triggerCommentID,
 		CoalescedCommentIds:  coalescedCommentIDs,
@@ -7458,16 +7458,19 @@ func IssueToMap(issue db.Issue, issuePrefix string) map[string]any {
 		// — clients localize those from the key — and a CUSTOM one is filled in
 		// by IssueToMapResolved, which has the catalog. Emitted unconditionally
 		// so this rendering cannot lose a key the HTTP one carries. (MUL-6749)
-		"status_name":      "",
-		"priority":         issue.Priority,
-		"assignee_type":    util.TextToPtr(issue.AssigneeType),
-		"assignee_id":      util.UUIDToPtr(issue.AssigneeID),
-		"creator_type":     issue.CreatorType,
-		"creator_id":       util.UUIDToString(issue.CreatorID),
-		"parent_issue_id":  util.UUIDToPtr(issue.ParentIssueID),
-		"project_id":       util.UUIDToPtr(issue.ProjectID),
-		"position":         issue.Position,
-		"stage":            util.Int4ToPtr(issue.Stage),
+		"status_name":     "",
+		"priority":        issue.Priority,
+		"assignee_type":   util.TextToPtr(issue.AssigneeType),
+		"assignee_id":     util.UUIDToPtr(issue.AssigneeID),
+		"creator_type":    issue.CreatorType,
+		"creator_id":      util.UUIDToString(issue.CreatorID),
+		"parent_issue_id": util.UUIDToPtr(issue.ParentIssueID),
+		"project_id":      util.UUIDToPtr(issue.ProjectID),
+		"position":        issue.Position,
+		"stage":           util.Int4ToPtr(issue.Stage),
+		// SPIKE: the declared rung. Null when undeclared, which is not missing
+		// data — it means the rung comes from depth.
+		"level":            util.TextToPtr(issue.Level),
 		"start_date":       util.DateToPtr(issue.StartDate),
 		"due_date":         util.DateToPtr(issue.DueDate),
 		"created_at":       util.TimestampToString(issue.CreatedAt),

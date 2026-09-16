@@ -1079,7 +1079,7 @@ func (q *Queries) ListIssueGCStatuses(ctx context.Context, arg ListIssueGCStatus
 const listIssues = `-- name: ListIssues :many
 SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
        i.assignee_type, i.assignee_id, i.creator_type, i.creator_id,
-       i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.last_activity_at, i.number, i.project_id, i.metadata, i.stage, i.properties,
+       i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.last_activity_at, i.number, i.project_id, i.metadata, i.stage, i.level, i.properties,
        i.revision
 FROM issue i
 WHERE i.workspace_id = $1
@@ -1172,6 +1172,7 @@ type ListIssuesRow struct {
 	ProjectID      pgtype.UUID        `json:"project_id"`
 	Metadata       []byte             `json:"metadata"`
 	Stage          pgtype.Int4        `json:"stage"`
+	Level          pgtype.Text        `json:"level"`
 	Properties     []byte             `json:"properties"`
 	Revision       int64              `json:"revision"`
 }
@@ -1226,6 +1227,7 @@ func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]ListI
 			&i.ProjectID,
 			&i.Metadata,
 			&i.Stage,
+			&i.Level,
 			&i.Properties,
 			&i.Revision,
 		); err != nil {
@@ -1242,7 +1244,7 @@ func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]ListI
 const listOpenIssues = `-- name: ListOpenIssues :many
 SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
        i.assignee_type, i.assignee_id, i.creator_type, i.creator_id,
-       i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.last_activity_at, i.number, i.project_id, i.metadata, i.stage, i.properties,
+       i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.last_activity_at, i.number, i.project_id, i.metadata, i.stage, i.level, i.properties,
        i.revision
 FROM issue i
 WHERE i.workspace_id = $1
@@ -1381,6 +1383,7 @@ type ListOpenIssuesRow struct {
 	ProjectID      pgtype.UUID        `json:"project_id"`
 	Metadata       []byte             `json:"metadata"`
 	Stage          pgtype.Int4        `json:"stage"`
+	Level          pgtype.Text        `json:"level"`
 	Properties     []byte             `json:"properties"`
 	Revision       int64              `json:"revision"`
 }
@@ -1429,6 +1432,7 @@ func (q *Queries) ListOpenIssues(ctx context.Context, arg ListOpenIssuesParams) 
 			&i.ProjectID,
 			&i.Metadata,
 			&i.Stage,
+			&i.Level,
 			&i.Properties,
 			&i.Revision,
 		); err != nil {

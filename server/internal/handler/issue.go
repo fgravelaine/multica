@@ -71,7 +71,11 @@ type IssueResponse struct {
 	// Stage groups sub-issues under the same parent into ordered barrier
 	// groups (null = unstaged). See issue_child_done.go for how a closed
 	// stage gates the child-done -> parent wake.
-	Stage     *int32  `json:"stage"`
+	Stage *int32 `json:"stage"`
+	// SPIKE: the rung this unit declares itself to be, or null when it has
+	// never said. Null is not missing data — it means the rung comes from how
+	// deep the unit sits, and only a DECLARED rung can disagree with that.
+	Level     *string `json:"level"`
 	StartDate *string `json:"start_date"`
 	DueDate   *string `json:"due_date"`
 	CreatedAt string  `json:"created_at"`
@@ -339,6 +343,7 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		ProjectID:      uuidToPtr(i.ProjectID),
 		Position:       i.Position,
 		Stage:          int4ToPtr(i.Stage),
+		Level:          textToPtr(i.Level),
 		StartDate:      dateToPtr(i.StartDate),
 		DueDate:        dateToPtr(i.DueDate),
 		CreatedAt:      timestampToString(i.CreatedAt),
@@ -376,6 +381,7 @@ func issueListRowToResponse(i db.ListIssuesRow, issuePrefix string) IssueRespons
 		ProjectID:      uuidToPtr(i.ProjectID),
 		Position:       i.Position,
 		Stage:          int4ToPtr(i.Stage),
+		Level:          textToPtr(i.Level),
 		StartDate:      dateToPtr(i.StartDate),
 		DueDate:        dateToPtr(i.DueDate),
 		CreatedAt:      timestampToString(i.CreatedAt),
@@ -445,6 +451,7 @@ func openIssueRowToResponse(i db.ListOpenIssuesRow, issuePrefix string) IssueRes
 		ProjectID:      uuidToPtr(i.ProjectID),
 		Position:       i.Position,
 		Stage:          int4ToPtr(i.Stage),
+		Level:          textToPtr(i.Level),
 		StartDate:      dateToPtr(i.StartDate),
 		DueDate:        dateToPtr(i.DueDate),
 		CreatedAt:      timestampToString(i.CreatedAt),
