@@ -410,6 +410,7 @@
     "prop_status": "상태",
     "prop_priority": "우선순위",
     "prop_stage": "단계",
+    "prop_level": "레벨",
     "prop_assignee": "담당자",
     "prop_start_date": "시작일",
     "prop_due_date": "마감일",

@@ -415,6 +415,7 @@
     "prop_status": "Status",
     "prop_priority": "Priority",
     "prop_stage": "Stage",
+    "prop_level": "Level",
     "prop_assignee": "Assignee",
     "prop_start_date": "Start date",
     "prop_due_date": "Due date",

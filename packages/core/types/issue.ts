@@ -194,6 +194,14 @@ export interface Issue {
   // parent assignee is notified/woken only when every sub-issue in a stage
   // finishes; see server/internal/handler/issue_child_done.go.
   stage: number | null;
+  /**
+   * SPIKE: the rung this unit declares itself to be — campaign, mission,
+   * objective, task, step. Null is not missing data: it means the rung comes
+   * from how deep the unit sits, and only a DECLARED rung can disagree with a
+   * unit's own parentage, which is what makes a unit standing on its own
+   * findable at all.
+   */
+  level?: string | null;
   // Calendar days as date-only "YYYY-MM-DD" (no time, no timezone). Use the
   // helpers in @multica/core/issues/date to format/compare — never `new Date()`
   // + local formatting, which shifts the day by the viewer's offset.

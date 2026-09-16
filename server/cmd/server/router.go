@@ -1915,6 +1915,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// a wait on a unit in another mission or another squad's
 					// tree. issue_dependency existed with no reader and no
 					// writer; this is the writer.
+					r.Get("/dependencies", h.ListIssueDependencies)
 					r.Post("/dependencies", h.SetIssueDependency)
 					r.Delete("/dependencies", h.SetIssueDependency)
 					// SPIKE: the mission view. One aggregation endpoint for the

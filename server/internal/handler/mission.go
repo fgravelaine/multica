@@ -1642,3 +1642,47 @@ func (h *Handler) SetIssueDependency(w http.ResponseWriter, r *http.Request) {
 		"depends_on": uuidToString(blocker.ID),
 	})
 }
+
+// ListIssueDependencies is what one unit is waiting on.
+//
+// The mission payload already carries this for a whole tree; this is the same
+// rows for a single issue, so the issue page can show and edit them without
+// loading a mission it may not be part of.
+func (h *Handler) ListIssueDependencies(w http.ResponseWriter, r *http.Request) {
+	issue, ok := h.loadIssueForUser(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+
+	rows, err := h.Queries.ListMissionDependencies(r.Context(), []pgtype.UUID{issue.ID})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load dependencies")
+		return
+	}
+
+	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
+	out := make([]MissionBlocker, 0, len(rows))
+	for _, row := range rows {
+		blocker := MissionBlocker{
+			IssueID:    uuidToString(row.BlockerIssueID),
+			Identifier: prefix + "-" + strconv.Itoa(int(row.BlockerNumber)),
+			Title:      row.BlockerTitle,
+			Status:     row.BlockerStatus,
+			Relation:   blockerDependency,
+		}
+		if row.BlockerAssigneeType.Valid {
+			at := row.BlockerAssigneeType.String
+			blocker.AssigneeType = &at
+		}
+		if row.BlockerAssigneeID.Valid {
+			aid := uuidToString(row.BlockerAssigneeID)
+			blocker.AssigneeID = &aid
+		}
+		out = append(out, blocker)
+	}
+
+	// `outside` is deliberately absent here. It means "not in the tree you are
+	// looking at", and from one issue there is no tree to be outside of —
+	// sending it would be answering a question nobody asked.
+	writeJSON(w, http.StatusOK, map[string]any{"blocked_by": out})
+}

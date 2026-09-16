@@ -59,6 +59,9 @@ import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@multica/ui/components/ui/command";
 import { AvatarGroup, AvatarGroupCount } from "@multica/ui/components/ui/avatar";
 import { ActorAvatar } from "../../common/actor-avatar";
+// SPIKE: the ladder's two writes. They live on this page because the mission
+// view writes nothing — not a status, not a rung, not a link.
+import { LevelPicker, WaitsOnSection } from "../../missions/components";
 import { PropRow } from "../../common/prop-row";
 import { PropertyIcon } from "../../common/property-icon";
 import type { Attachment, Issue, IssueProperty, IssueStatus, IssueStatusCategory, IssuePriority, TimelineEntry, UpdateIssueRequest } from "@multica/core/types";
@@ -396,7 +399,17 @@ const EMPTY_REPLIES: TimelineEntry[] = [];
 // its row and add-property entry are gated on `issue.parent_issue_id` at the
 // render site below — it stays in this list so seeding/visibility flow through
 // the same machinery as the other optional props.
-const OPTIONAL_PROP_KEYS = ["priority", "stage", "start_date", "due_date", "labels"] as const;
+// SPIKE: `level` is the rung a unit declares itself to be. Optional because
+// most units never declare one — undeclared means the rung comes from depth,
+// and only a declared rung can disagree with a unit's own parentage.
+const OPTIONAL_PROP_KEYS = [
+  "priority",
+  "stage",
+  "level",
+  "start_date",
+  "due_date",
+  "labels",
+] as const;
 type OptionalPropKey = (typeof OPTIONAL_PROP_KEYS)[number];
 
 function isOptionalPropSet(
@@ -409,6 +422,8 @@ function isOptionalPropSet(
       return issue.priority !== "none";
     case "stage":
       return issue.stage !== null && issue.stage !== undefined;
+    case "level":
+      return issue.level !== null && issue.level !== undefined;
     case "start_date":
       return !!issue.start_date;
     case "due_date":
@@ -2354,6 +2369,11 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               />
             </PropRow>
           )}
+          {visibleOptionalProps.has("level") && (
+            <PropRow label={t(($) => $.detail.prop_level)}>
+              <LevelPicker issueId={issue.id} level={issue.level} align="start" />
+            </PropRow>
+          )}
           {visibleOptionalProps.has("start_date") && (
             <PropRow label={t(($) => $.detail.prop_start_date)}>
               <StartDatePicker
@@ -2442,6 +2462,9 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                       {k === "stage" && (
                         <Milestone className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       )}
+                      {k === "level" && (
+                        <Waypoints className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      )}
                       {k === "start_date" && (
                         <CalendarClock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       )}
@@ -2454,6 +2477,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                       <span className="truncate">
                         {k === "priority" && t(($) => $.detail.prop_priority)}
                         {k === "stage" && t(($) => $.detail.prop_stage)}
+                        {k === "level" && t(($) => $.detail.prop_level)}
                         {k === "start_date" && t(($) => $.detail.prop_start_date)}
                         {k === "due_date" && t(($) => $.detail.prop_due_date)}
                         {k === "labels" && t(($) => $.detail.prop_labels)}
@@ -3125,6 +3149,13 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               />
             </div>
             {descDragOver && <FileDropOverlay />}
+          </div>
+
+          {/* SPIKE: what this unit is waiting on, beside what is under it.
+              Both say how it relates to other units; one is below, the other
+              is in front. */}
+          <div className="mt-6">
+            <WaitsOnSection issueId={issue.id} />
           </div>
 
           {/* Sub-issues — Linear-style */}

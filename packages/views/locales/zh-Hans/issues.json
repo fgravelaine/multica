@@ -410,6 +410,7 @@
     "prop_status": "状态",
     "prop_priority": "优先级",
     "prop_stage": "阶段",
+    "prop_level": "层级",
     "prop_assignee": "负责人",
     "prop_start_date": "开始日期",
     "prop_due_date": "截止日期",

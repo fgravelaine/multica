@@ -224,6 +224,7 @@ import type {
   RaisedHand,
   MissionResponse,
   MissionBoardResponse,
+  MissionBlocker,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type {
@@ -4389,6 +4390,15 @@ export class ApiClient {
     if (params?.campaign) q.set("campaign", params.campaign);
     const suffix = q.size > 0 ? `?${q.toString()}` : "";
     return this.fetch<MissionBoardResponse>(`/api/missions${suffix}`);
+  }
+
+  // SPIKE (not upstream): what one unit is waiting on. Same rows the mission
+  // payload carries for a whole tree, for a single issue — so the issue page
+  // can show and edit them without loading a mission it may not be part of.
+  async listIssueDependencies(issueId: string): Promise<{ blocked_by: MissionBlocker[] }> {
+    return this.fetch<{ blocked_by: MissionBlocker[] }>(
+      `/api/issues/${issueId}/dependencies`,
+    );
   }
 
   // SPIKE (not upstream): declare that a unit waits on another one — including

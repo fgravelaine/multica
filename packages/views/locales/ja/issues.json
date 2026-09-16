@@ -410,6 +410,7 @@
     "prop_status": "ステータス",
     "prop_priority": "優先度",
     "prop_stage": "ステージ",
+    "prop_level": "レベル",
     "prop_assignee": "担当者",
     "prop_start_date": "開始日",
     "prop_due_date": "期限",
