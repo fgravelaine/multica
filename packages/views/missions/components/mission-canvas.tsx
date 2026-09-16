@@ -55,11 +55,14 @@ const GAP_X = 96;
 const GAP_Y = 16;
 
 /**
- * The ladder, in order. Campaign is deliberately absent: it is not a depth in
- * this tree, it is the project the mission belongs to, and the header states
- * it rather than the canvas drawing a column for it.
+ * The ladder, in order, one name per column.
+ *
+ * Which name a column gets depends on where the tree you opened sits in the
+ * workspace, so the server sends each node its own rung and these are only the
+ * headers for depth 0..4 FROM A CAMPAIGN. Open the view lower down and the
+ * server's levels still say the truth on each node.
  */
-const LEVEL_COLUMNS = ["Mission", "Objectives", "Tasks", "Steps"] as const;
+const LEVEL_COLUMNS = ["Campaign", "Missions", "Objectives", "Tasks", "Steps"] as const;
 
 /** How a node's stage stands, so the chip can carry the barrier's own words. */
 type StageState = "closed" | "frontier" | "ahead" | "none";

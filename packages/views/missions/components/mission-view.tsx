@@ -150,6 +150,7 @@ function MissionHeader({ data, issueHref }: { data: MissionResponse; issueHref: 
     return { tokens, ticks, metered };
   }, [data.nodes]);
 
+  const missions = data.nodes.filter((n) => n.level === "mission").length;
   const objectives = data.nodes.filter((n) => n.level === "objective").length;
   const tasks = data.nodes.filter((n) => n.level === "task").length;
   // Steps are deliberately not counted here. They are below the reporting
@@ -159,29 +160,29 @@ function MissionHeader({ data, issueHref }: { data: MissionResponse; issueHref: 
 
   return (
     <header className="mb-6 border-b pb-4">
-      {/* The rung above. A mission belongs to a campaign, which is Multica's
-          project — so the top of the ladder needed no new word, only saying.
-          An unattached mission says so rather than showing nothing, because
-          "no campaign" is a fact about the mission, not a missing value. */}
+      {/* The product line, NOT a rung. Multica's project is a flat per-issue
+          tag that is not inherited, so it groups across the tree rather than
+          sitting above it — right for a product, wrong for a ladder. The rung
+          above a mission is a campaign, and that is parentage. */}
       <p className="flex items-center gap-1.5 text-caption uppercase tracking-wide text-muted-foreground">
-        {data.campaign ? (
+        {data.product ? (
           <>
-            {data.campaign.icon ? <span aria-hidden>{data.campaign.icon}</span> : null}
+            {data.product.icon ? <span aria-hidden>{data.product.icon}</span> : null}
             <a
-              href={paths.projectDetail(data.campaign.id)}
+              href={paths.projectDetail(data.product.id)}
               className="hover:text-foreground hover:underline"
             >
-              {data.campaign.title}
+              {data.product.title}
             </a>
             <span aria-hidden className="text-muted-foreground/40">/</span>
           </>
         ) : (
           <>
-            <span className="text-muted-foreground/60">No campaign</span>
+            <span className="text-muted-foreground/60">No product</span>
             <span aria-hidden className="text-muted-foreground/40">/</span>
           </>
         )}
-        <span>Mission</span>
+        <span>{data.root.level}</span>
       </p>
       <h1 className="mt-1 text-xl font-semibold leading-tight">{data.root.title}</h1>
       <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-caption text-muted-foreground">
@@ -194,7 +195,15 @@ function MissionHeader({ data, issueHref }: { data: MissionResponse; issueHref: 
             must be taken; tasks are what units are ordered to do — and knowing
             three objectives carry forty tasks is a different fact from
             "43 sub-issues". */}
+        {/* Only the rungs that actually appear below whatever you opened —
+            a mission has no missions under it, and printing "0 missions"
+            would be noise rather than a fact. */}
         <span>
+          {missions > 0 ? (
+            <>
+              {missions} {missions === 1 ? "mission" : "missions"} ·{" "}
+            </>
+          ) : null}
           {objectives} {objectives === 1 ? "objective" : "objectives"} · {tasks}{" "}
           {tasks === 1 ? "task" : "tasks"}
           {steps > 0 ? (

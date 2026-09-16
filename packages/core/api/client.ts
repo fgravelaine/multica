@@ -223,7 +223,7 @@ import type {
   CreateCommentSubIssueRequest,
   RaisedHand,
   MissionResponse,
-  MissionListResponse,
+  MissionBoardResponse,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type {
@@ -4378,8 +4378,27 @@ export class ApiClient {
 
   // SPIKE (not upstream): the mission index. Two queries on the server, one
   // request here, regardless of how many missions the workspace has.
-  async listMissions(): Promise<MissionListResponse> {
-    return this.fetch<MissionListResponse>("/api/missions");
+  async listMissions(params?: {
+    level?: string;
+    orphans?: boolean;
+    campaign?: string;
+  }): Promise<MissionBoardResponse> {
+    const q = new URLSearchParams();
+    if (params?.level) q.set("level", params.level);
+    if (params?.orphans) q.set("orphans", "1");
+    if (params?.campaign) q.set("campaign", params.campaign);
+    const suffix = q.size > 0 ? `?${q.toString()}` : "";
+    return this.fetch<MissionBoardResponse>(`/api/missions${suffix}`);
+  }
+
+  // SPIKE (not upstream): declare what a unit is meant to be. The only way an
+  // orphan comes into existence — undeclared units take their rung from depth
+  // and so cannot disagree with their own parentage. null clears it.
+  async setIssueLevel(issueId: string, level: string | null): Promise<void> {
+    await this.fetch(`/api/issues/${issueId}/level`, {
+      method: "PUT",
+      body: JSON.stringify({ level }),
+    });
   }
 
   // SPIKE (not upstream): the mission view. ONE request for the whole tree —

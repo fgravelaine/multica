@@ -1907,6 +1907,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// field on UpdateIssue, so the spike stays clear of the
 					// activity-log and status-transition machinery.
 					r.Put("/routing-policy", h.SetIssueRoutingPolicy)
+					// SPIKE: the ladder. Declaring a rung is the only way an
+					// orphan can exist, so it is an explicit act with its own
+					// endpoint rather than a field on UpdateIssue.
+					r.Put("/level", h.SetIssueLevel)
 					// SPIKE: the mission view. One aggregation endpoint for the
 					// whole tree under this issue — read only, and the only
 					// request the view makes.

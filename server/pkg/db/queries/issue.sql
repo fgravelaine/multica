@@ -639,3 +639,19 @@ FROM (
     WHERE workspace_id = $1
     LIMIT sqlc.arg('limit')::bigint
 ) bounded_issues;
+
+-- name: SetIssueLevel :one
+-- SPIKE: the whole write surface for a declared rung.
+--
+-- Its own statement rather than a field on UpdateIssue, the same call
+-- SetIssueRoutingPolicy made and for the same reason: UpdateIssue carries the
+-- activity log and the status-transition machinery, and a rung is neither.
+--
+-- Declaring is deliberate. NULL means undeclared, the rung falls back to depth,
+-- and an undeclared unit can never be an orphan — so an orphan exists only
+-- because somebody said what a unit was meant to be and the tree disagreed.
+UPDATE issue
+SET level      = sqlc.narg('level'),
+    updated_at = now()
+WHERE id = @id AND workspace_id = @workspace_id
+RETURNING *;

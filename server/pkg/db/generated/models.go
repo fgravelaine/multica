@@ -793,6 +793,7 @@ type Issue struct {
 	Revision           int64              `json:"revision"`
 	LastActivityAt     pgtype.Timestamptz `json:"last_activity_at"`
 	RoutingPolicy      pgtype.Text        `json:"routing_policy"`
+	Level              pgtype.Text        `json:"level"`
 }
 
 type IssueDependency struct {

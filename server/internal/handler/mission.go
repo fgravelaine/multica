@@ -15,8 +15,10 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -33,6 +35,15 @@ import (
 // this comes back truncated and says so, rather than silently losing its
 // bottom.
 const missionMaxDepth = 5
+
+// missionBoardDepth bounds the workspace-wide walk the board does.
+//
+// Deeper than the detail view's bound on purpose: the detail view truncates a
+// payload and says so, but the board COUNTS, and a count that silently omits
+// everything past depth 5 is a wrong number rather than a short list. Nothing
+// realistic reaches 20, and a tree that does has a problem the board is not
+// the place to report.
+const missionBoardDepth = 20
 
 // missionWaitingReason is why a unit is parked. Each value is a state the
 // product already records; none is inferred from absence.
@@ -94,6 +105,7 @@ type MissionNode struct {
 
 	// Level is what this unit IS.
 	//
+	//   campaign  — a body of work with many missions in it.
 	//   mission   — task + purpose. Carries the intent and the end state.
 	//   objective — what must be taken and held for the mission to succeed.
 	//               Decisive: you can tell whether you hold it.
@@ -109,10 +121,16 @@ type MissionNode struct {
 	//
 	// What it earns, boundary by boundary:
 	//
-	//   campaign/mission   REAL. Different tables — project and issue.
-	//   mission/objective  SHAPE ONLY. A root is parent_issue_id IS NULL, so it
-	//                      has no parent to wake. Nothing else differs.
-	//   objective/task     NOTHING. No code anywhere keys on depth.
+	//   campaign/mission   SHAPE ONLY. A campaign is parent_issue_id IS NULL, so
+	//                      it has no parent to wake. Nothing else differs.
+	//   mission/objective  NOTHING. No code anywhere keys on depth.
+	//   objective/task     NOTHING, likewise.
+	//
+	// A campaign is NOT Multica's `project`. That was an earlier mistake here:
+	// project_id is a flat per-issue tag that is not inherited, so it groups
+	// across the tree rather than sitting above it. Its right use is the
+	// PRODUCT — every issue in Veezeet carries it, at any depth, as a filter.
+	// The ladder is parentage, which is the one relation the product enforces.
 	//   task/step          REAL, and the only rung this view itself creates:
 	//                      a step is folded on the canvas until asked for.
 	//                      That is what a step IS — below the reporting line.
@@ -190,6 +208,7 @@ type MissionBlocker struct {
 const blockerStageBarrier = "stage_barrier"
 
 const (
+	levelCampaign  = "campaign"
 	levelMission   = "mission"
 	levelObjective = "objective"
 	levelTask      = "task"
@@ -205,10 +224,12 @@ const (
 func missionLevel(depth int32) string {
 	switch depth {
 	case 0:
-		return levelMission
+		return levelCampaign
 	case 1:
-		return levelObjective
+		return levelMission
 	case 2:
+		return levelObjective
+	case 3:
 		return levelTask
 	default:
 		return levelStep
@@ -406,13 +427,14 @@ type MissionLeadContest struct {
 }
 
 type MissionResponse struct {
-	// Campaign is the rung above the mission. Absent when the mission belongs
-	// to none, which the client states rather than hides.
-	Campaign *MissionCampaign     `json:"campaign,omitempty"`
-	Root     MissionNode          `json:"root"`
-	Nodes    []MissionNode        `json:"nodes"`
-	Stages   []MissionStage       `json:"stages"`
-	Waiting  []MissionWaitingUnit `json:"waiting"`
+	// Product is the line this tree belongs to, not a rung above it. Absent
+	// when the root carries no project tag, which the client states rather
+	// than hides.
+	Product *MissionProduct      `json:"product,omitempty"`
+	Root    MissionNode          `json:"root"`
+	Nodes   []MissionNode        `json:"nodes"`
+	Stages  []MissionStage       `json:"stages"`
+	Waiting []MissionWaitingUnit `json:"waiting"`
 	// WithLead is the half of the raised hands that is NOT on the human. A hand
 	// addressed to a squad leader is out of the primary list by construction —
 	// that is the entire point of a recipient, and leaving it in would mean the
@@ -589,6 +611,18 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 		leads = append(leads, entry)
 	}
 
+	// The rung is the unit's TRUE depth, not its depth from the root you opened.
+	// Open the view on a mission and without this its own root would be numbered
+	// 0 and labelled a campaign.
+	rootDepth, err := h.Queries.CountIssueAncestors(r.Context(), db.CountIssueAncestorsParams{
+		IssueID:  root.ID,
+		MaxDepth: int32(missionMaxDepth),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to place the mission in its tree")
+		return
+	}
+
 	prefix := h.getIssuePrefix(r.Context(), root.WorkspaceID)
 	resolver := issuestatus.NewResolver(root.WorkspaceID)
 	now := time.Now().UTC()
@@ -678,7 +712,7 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 			StatusCategory: issuestatus.WireCategory(row.Status, category),
 			Priority:       row.Priority,
 			Depth:          row.Depth,
-			Level:          missionLevel(row.Depth),
+			Level:          missionLevel(rootDepth + row.Depth),
 			Terminal:       isTerminalChildStatus(effective),
 			Usage:          usageByIssue[id],
 		}
@@ -751,18 +785,17 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 		return waiting[i].WaitedSecs > waiting[j].WaitedSecs
 	})
 
-	// The campaign. One row, on the root only — an objective and a task belong
-	// to their mission, not directly to a campaign. pgx returns ErrNoRows when
-	// the mission is unattached, which is not an error: it is the answer.
-	var campaign *MissionCampaign
+	// The product line. One row, read off the root. pgx returns ErrNoRows when
+	// the root carries no project tag, which is not an error: it is the answer.
+	var product *MissionProduct
 	if row, err := h.Queries.GetMissionCampaign(r.Context(), root.ID); err == nil {
-		campaign = &MissionCampaign{
+		product = &MissionProduct{
 			ID:     uuidToString(row.ID),
 			Title:  row.Title,
 			Status: row.Status,
 		}
 		if row.Icon.Valid {
-			campaign.Icon = row.Icon.String
+			product.Icon = row.Icon.String
 		}
 	}
 
@@ -804,7 +837,7 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 	markWaitingBelow(nodes, nodeIndex, append(append(append([]MissionWaitingUnit{}, waiting...), withLead...), stalled...))
 
 	resp := MissionResponse{
-		Campaign: campaign,
+		Product:  product,
 		Root:     nodes[0],
 		Nodes:    nodes,
 		Stages:   stages,
@@ -1209,55 +1242,86 @@ func missionStalled(
 	return out
 }
 
-// ── The index ───────────────────────────────────────────────────────────────
-
-// MissionSummary is one mission in the list.
+// MissionProduct is the product line this tree belongs to. Multica calls it a
+// project.
 //
-// Nothing here is stored. A mission is a top-level issue that has children —
-// the product has no mission entity and this view does not invent one, which is
-// also why the list cannot be filtered, sorted or saved: it is a derivation,
-// not a place to put things.
-type MissionSummary struct {
-	ID         string `json:"id"`
-	Identifier string `json:"identifier"`
-	Number     int32  `json:"number"`
-	Title      string `json:"title"`
-	Status     string `json:"status"`
-
-	// Units is everything below the root, to the same depth bound the detail
-	// view uses — so the two never disagree about how big a mission is.
-	Units    int `json:"units"`
-	Done     int `json:"done"`
-	OpenHand int `json:"open_hands"`
-
-	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
-	UpdatedAt      time.Time  `json:"updated_at"`
-}
-
-// MissionCampaign is the campaign a mission belongs to.
-//
-// Multica calls it a project. The naming ladder is Campaign → Mission →
-// Objective → Task, and only the last three are depths in the issue tree — the
-// top rung is an entity that already exists, which is why nothing had to be
-// invented for it.
-type MissionCampaign struct {
+// NOT a rung. project_id is a flat per-issue tag that is not inherited, so it
+// groups ACROSS the tree rather than sitting above it — which is exactly right
+// for a product: every issue in Veezeet carries it, at any depth, as a filter.
+// The ladder is parentage, the one relation the product enforces.
+type MissionProduct struct {
 	ID     string `json:"id"`
 	Title  string `json:"title"`
 	Icon   string `json:"icon,omitempty"`
 	Status string `json:"status"`
 }
 
-type MissionListResponse struct {
-	Missions []MissionSummary `json:"missions"`
-	MaxDepth int              `json:"max_depth"`
+// ── The leveled board ───────────────────────────────────────────────────────
+
+// MissionBoardLevel is one rung, and how much is sitting on it.
+type MissionBoardLevel struct {
+	Level string `json:"level"`
+	Total int    `json:"total"`
+	// Orphans are units whose DECLARED rung disagrees with their parentage —
+	// an objective with no mission over it, say. They are counted per rung
+	// rather than once for the workspace, because "three orphan objectives" is
+	// a different problem from "three orphan tasks".
+	Orphans int `json:"orphans"`
 }
 
-// ListMissions is the index: every mission in the workspace, with enough to
-// choose one.
+// MissionBoardRef names a unit in one line, for a row to point at.
+type MissionBoardRef struct {
+	ID         string `json:"id"`
+	Identifier string `json:"identifier"`
+	Title      string `json:"title"`
+}
+
+// MissionBoardRow is one unit on the board, at whatever rung is being shown.
+type MissionBoardRow struct {
+	ID         string `json:"id"`
+	Identifier string `json:"identifier"`
+	Title      string `json:"title"`
+	Status     string `json:"status"`
+	Level      string `json:"level"`
+	Depth      int32  `json:"depth"`
+
+	// Orphan is the disagreement itself: this unit says what it is, and its
+	// parentage says otherwise. Not an error — a thing to go and look at.
+	Orphan bool `json:"orphan"`
+	// Declared is false when the rung came from depth rather than from anyone
+	// saying so. An undeclared unit can never be an orphan, which is what keeps
+	// the signal meaningful on a workspace full of existing issues.
+	Declared bool `json:"declared"`
+
+	Parent   *MissionBoardRef `json:"parent,omitempty"`
+	Campaign MissionBoardRef  `json:"campaign"`
+
+	Units     int `json:"units"`
+	Done      int `json:"done"`
+	OpenHands int `json:"open_hands"`
+
+	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+type MissionBoardResponse struct {
+	// Levels always carries every rung, including the empty ones, so the
+	// board's tabs do not appear and disappear as work moves.
+	Levels   []MissionBoardLevel `json:"levels"`
+	Level    string              `json:"level"`
+	Rows     []MissionBoardRow   `json:"rows"`
+	MaxDepth int                 `json:"max_depth"`
+}
+
+// missionRungs is the ladder in order. Also the allow-list for ?level=.
+var missionRungs = []string{levelCampaign, levelMission, levelObjective, levelTask, levelStep}
+
+// ListMissions is the leveled board: everything at one rung, plus how much sits
+// on every other rung.
 //
-// Two queries regardless of how many missions there are — the roots, then one
-// recursive rollup over all of them at once. A list that fans out per row is
-// the same mistake as a view that fans out per node, one level up.
+// Three queries regardless of the size of the workspace — the counts, the rows,
+// and one rollup over all the rows at once. Same rule as the detail view: a
+// board that fans out per row is the mistake one level up.
 func (h *Handler) ListMissions(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
@@ -1265,83 +1329,189 @@ func (h *Handler) ListMissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	roots, err := h.Queries.ListMissionRoots(r.Context(), wsUUID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list missions")
-		return
+	// Campaign by default: it is the rung you start from when you do not yet
+	// know which mission you are looking for.
+	level := levelCampaign
+	if raw := r.URL.Query().Get("level"); raw != "" {
+		if !slices.Contains(missionRungs, raw) {
+			writeError(w, http.StatusBadRequest, "unknown level")
+			return
+		}
+		level = raw
 	}
-	if len(roots) == 0 {
-		writeJSON(w, http.StatusOK, MissionListResponse{
-			Missions: []MissionSummary{},
-			MaxDepth: missionMaxDepth,
-		})
-		return
+	orphansOnly := r.URL.Query().Get("orphans") == "1"
+
+	var campaignFilter pgtype.UUID
+	if raw := r.URL.Query().Get("campaign"); raw != "" {
+		parsed, ok := parseUUIDOrBadRequest(w, raw, "campaign")
+		if !ok {
+			return
+		}
+		campaignFilter = parsed
 	}
 
-	missionIDs := make([]pgtype.UUID, 0, len(roots))
-	for _, root := range roots {
-		missionIDs = append(missionIDs, root.ID)
-	}
-
-	rollups, err := h.Queries.ListMissionRollups(r.Context(), db.ListMissionRollupsParams{
-		MissionIds: missionIDs,
-		MaxDepth:   int32(missionMaxDepth),
+	counts, err := h.Queries.CountIssuesByLevel(r.Context(), db.CountIssuesByLevelParams{
+		WorkspaceID: wsUUID,
+		MaxDepth:    int32(missionBoardDepth),
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to roll up missions")
+		writeError(w, http.StatusInternalServerError, "failed to count levels")
+		return
+	}
+	byLevel := make(map[string]db.CountIssuesByLevelRow, len(counts))
+	for _, row := range counts {
+		byLevel[row.Level] = row
+	}
+	levels := make([]MissionBoardLevel, 0, len(missionRungs))
+	for _, rung := range missionRungs {
+		entry := MissionBoardLevel{Level: rung}
+		if row, ok := byLevel[rung]; ok {
+			entry.Total = int(row.Total)
+			entry.Orphans = int(row.Orphans)
+		}
+		levels = append(levels, entry)
+	}
+
+	issues, err := h.Queries.ListIssuesAtLevel(r.Context(), db.ListIssuesAtLevelParams{
+		WorkspaceID: wsUUID,
+		MaxDepth:    int32(missionBoardDepth),
+		Level:       level,
+		OrphansOnly: orphansOnly,
+		CampaignID:  campaignFilter,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list the board")
 		return
 	}
 
 	prefix := h.getIssuePrefix(r.Context(), wsUUID)
-	// One resolver for the whole list: the catalog read is amortised across
-	// every mission and every status in it, which is the point of the type.
 	resolver := issuestatus.NewResolver(wsUUID)
+	identifier := func(number int32) string { return prefix + "-" + strconv.Itoa(int(number)) }
 
-	type rollup struct {
-		units, done, hands int
-	}
-	byMission := make(map[string]*rollup, len(roots))
-	for _, row := range rollups {
-		id := uuidToString(row.MissionID)
-		entry, ok := byMission[id]
-		if !ok {
-			entry = &rollup{}
-			byMission[id] = entry
+	rollups := map[string]*missionRollup{}
+	if len(issues) > 0 {
+		ids := make([]pgtype.UUID, 0, len(issues))
+		for _, row := range issues {
+			ids = append(ids, row.ID)
 		}
-		entry.units += int(row.Units)
-		entry.hands += int(row.OpenHands)
-		// Terminal is the workspace's rule, not a string comparison — the same
-		// resolver the detail view uses, so "done" means one thing in both.
-		if isTerminalChildStatus(resolver.Effective(r.Context(), h.Queries, row.Status)) {
-			entry.done += int(row.Units)
+		rows, err := h.Queries.ListMissionRollups(r.Context(), db.ListMissionRollupsParams{
+			MissionIds: ids,
+			MaxDepth:   int32(missionBoardDepth),
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to roll up the board")
+			return
+		}
+		for _, row := range rows {
+			id := uuidToString(row.MissionID)
+			entry, ok := rollups[id]
+			if !ok {
+				entry = &missionRollup{}
+				rollups[id] = entry
+			}
+			entry.units += int(row.Units)
+			entry.hands += int(row.OpenHands)
+			if isTerminalChildStatus(resolver.Effective(r.Context(), h.Queries, row.Status)) {
+				entry.done += int(row.Units)
+			}
 		}
 	}
 
-	missions := make([]MissionSummary, 0, len(roots))
-	for _, root := range roots {
-		id := uuidToString(root.ID)
-		summary := MissionSummary{
+	out := make([]MissionBoardRow, 0, len(issues))
+	for _, row := range issues {
+		id := uuidToString(row.ID)
+		entry := MissionBoardRow{
 			ID:         id,
-			Identifier: prefix + "-" + strconv.Itoa(int(root.Number)),
-			Number:     root.Number,
-			Title:      root.Title,
-			Status:     root.Status,
-			UpdatedAt:  root.UpdatedAt.Time.UTC(),
+			Identifier: identifier(row.Number),
+			Title:      row.Title,
+			Status:     row.Status,
+			Level:      row.Level,
+			Depth:      row.Depth,
+			// pgtype.Bool: the CASE can produce NULL for a row whose declared
+			// level is NULL, which is "not an orphan" rather than "unknown".
+			Orphan:   row.Orphan.Valid && row.Orphan.Bool,
+			Declared: row.DeclaredLevel.Valid,
+			Campaign: MissionBoardRef{
+				ID:         uuidToString(row.CampaignID),
+				Identifier: identifier(row.CampaignNumber),
+				Title:      row.CampaignTitle,
+			},
+			UpdatedAt: row.UpdatedAt.Time.UTC(),
 		}
-		if entry, ok := byMission[id]; ok {
-			summary.Units = entry.units
-			summary.Done = entry.done
-			summary.OpenHand = entry.hands
+		if row.ParentNumber.Valid {
+			entry.Parent = &MissionBoardRef{
+				Identifier: identifier(row.ParentNumber.Int32),
+				Title:      row.ParentTitle.String,
+			}
 		}
-		if root.LastActivityAt.Valid {
-			at := root.LastActivityAt.Time.UTC()
-			summary.LastActivityAt = &at
+		if rollup, ok := rollups[id]; ok {
+			entry.Units = rollup.units
+			entry.Done = rollup.done
+			entry.OpenHands = rollup.hands
 		}
-		missions = append(missions, summary)
+		if row.LastActivityAt.Valid {
+			at := row.LastActivityAt.Time.UTC()
+			entry.LastActivityAt = &at
+		}
+		out = append(out, entry)
 	}
 
-	writeJSON(w, http.StatusOK, MissionListResponse{
-		Missions: missions,
-		MaxDepth: missionMaxDepth,
+	writeJSON(w, http.StatusOK, MissionBoardResponse{
+		Levels:   levels,
+		Level:    level,
+		Rows:     out,
+		MaxDepth: missionBoardDepth,
+	})
+}
+
+type missionRollup struct {
+	units, done, hands int
+}
+
+// SetIssueLevel declares what a unit is meant to be.
+//
+// The whole write surface for the ladder, and the only way an orphan comes into
+// existence: undeclared units take their rung from depth and so can never
+// disagree with their own parentage. Sending null clears the declaration and
+// hands the unit back to depth.
+func (h *Handler) SetIssueLevel(w http.ResponseWriter, r *http.Request) {
+	issue, ok := h.loadIssueForUser(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+
+	var req struct {
+		Level *string `json:"level"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+
+	var level pgtype.Text
+	if req.Level != nil {
+		if !slices.Contains(missionRungs, *req.Level) {
+			writeError(w, http.StatusBadRequest, "unknown level: "+strings.Join(missionRungs, ", "))
+			return
+		}
+		level = pgtype.Text{String: *req.Level, Valid: true}
+	}
+
+	// No reparenting, no cascade to children, no healing of a disagreement.
+	// That restraint IS the feature: a declared rung that stops matching its
+	// parentage is the report, and rewriting it would delete the finding.
+	updated, err := h.Queries.SetIssueLevel(r.Context(), db.SetIssueLevelParams{
+		ID:          issue.ID,
+		WorkspaceID: issue.WorkspaceID,
+		Level:       level,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to set level")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":    uuidToString(updated.ID),
+		"level": req.Level,
 	})
 }

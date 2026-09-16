@@ -1,6 +1,9 @@
 package handler
 
 import (
+	"fmt"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -510,7 +513,7 @@ func TestMissionBlockers_ImplicitStageBlocksNothing(t *testing.T) {
 // tree; the campaign is Multica's project, an entity that already existed.
 
 func TestMissionLevel_StepIsTheFloor(t *testing.T) {
-	// Four names against an unbounded tree. Step absorbs depth 3 and below,
+	// Five names against an unbounded tree. Step absorbs depth 4 and below,
 	// which is not the repetition it looks like: a step's own children sit
 	// inside a FOLDED step, so a reader never meets the name twice in one
 	// column. Without a floor the scheme needs a noun per depth and runs out at
@@ -526,15 +529,36 @@ func TestMissionLevel_StepIsTheFloor(t *testing.T) {
 	// enforces — see MissionNode.Level. Only the floor is load-bearing, which
 	// is why only the floor is pinned by a test.
 	for depth, want := range map[int32]string{
-		0: levelMission,
-		1: levelObjective,
-		2: levelTask,
-		3: levelStep,
+		0: levelCampaign,
+		1: levelMission,
+		2: levelObjective,
+		3: levelTask,
 		4: levelStep,
 		5: levelStep,
 	} {
 		if got := missionLevel(depth); got != want {
 			t.Errorf("depth %d = %q, want %q", depth, got, want)
+		}
+	}
+}
+
+// The depth→rung CASE lives twice: here in Go, and inline in the board's SQL
+// (CountIssuesByLevel / ListIssuesAtLevel), because shipping every issue in a
+// workspace to Go to be labelled would be worse. This pins the two together —
+// if the ladder changes and the SQL does not, this fails.
+func TestMissionLevel_MatchesTheBoardSQL(t *testing.T) {
+	sql, err := os.ReadFile("../../pkg/db/queries/mission.sql")
+	if err != nil {
+		t.Fatalf("read queries: %v", err)
+	}
+	for depth := int32(0); depth <= 4; depth += 1 {
+		want := missionLevel(depth)
+		clause := fmt.Sprintf("WHEN w.depth = %d THEN '%s'", depth, want)
+		if depth == 4 {
+			clause = fmt.Sprintf("ELSE '%s'", want)
+		}
+		if !strings.Contains(string(sql), clause) {
+			t.Errorf("missionLevel(%d) = %q, but the board SQL has no %q", depth, want, clause)
 		}
 	}
 }

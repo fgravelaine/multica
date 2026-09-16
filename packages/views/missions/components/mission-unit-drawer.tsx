@@ -40,6 +40,7 @@ import { ActorAvatar } from "../../common/actor-avatar";
  * task is still a task, and nothing in the product changes below depth 2.
  */
 const LEVEL_MEANS: Record<MissionLevel, string> = {
+  campaign: "a body of work with many missions in it.",
   mission: "carries the intent and the end state. Only a human writes one.",
   objective: "must be taken and held for the mission to succeed. You can tell whether you hold it.",
   task: "what one unit is ordered to do, and reports on.",

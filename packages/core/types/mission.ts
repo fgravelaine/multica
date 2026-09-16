@@ -40,7 +40,12 @@ export interface MissionNodeUsage {
  * line and the canvas keeps it folded until asked. Depth 4 and below are steps
  * too — inside a folded step, so a reader never meets the name twice.
  */
-export type MissionLevel = "mission" | "objective" | "task" | "step";
+export type MissionLevel =
+  | "campaign"
+  | "mission"
+  | "objective"
+  | "task"
+  | "step";
 
 export interface MissionNode {
   id: string;
@@ -187,8 +192,14 @@ export interface MissionLeadContest {
   still_open: number;
 }
 
-/** The rung above the mission. Multica calls it a project. */
-export interface MissionCampaign {
+/**
+ * The product line a tree belongs to. Multica calls it a project.
+ *
+ * NOT a rung. `project_id` is a flat per-issue tag that is not inherited, so it
+ * groups ACROSS the tree rather than sitting above it — right for a product,
+ * wrong for a ladder. The ladder is parentage.
+ */
+export interface MissionProduct {
   id: string;
   title: string;
   icon?: string;
@@ -196,8 +207,8 @@ export interface MissionCampaign {
 }
 
 export interface MissionResponse {
-  /** Absent when the mission belongs to no campaign — stated, not hidden. */
-  campaign?: MissionCampaign;
+  /** Absent when the root carries no project tag — stated, not hidden. */
+  product?: MissionProduct;
   root: MissionNode;
   nodes: MissionNode[];
   stages: MissionStage[];
@@ -228,20 +239,41 @@ export interface MissionResponse {
   max_depth: number;
 }
 
-/**
- * One mission in the index.
- *
- * A mission is not an entity: it is a top-level issue that has children. The
- * index derives the list every time rather than storing one, which is why it
- * cannot be filtered, sorted or saved — there is nothing to save it on.
- */
-export interface MissionSummary {
+/** One rung, and how much is sitting on it. */
+export interface MissionBoardLevel {
+  level: MissionLevel;
+  total: number;
+  /** Units whose DECLARED rung disagrees with their parentage. */
+  orphans: number;
+}
+
+/** A unit named in one line, for a row to point at. */
+export interface MissionBoardRef {
   id: string;
   identifier: string;
-  number: number;
+  title: string;
+}
+
+export interface MissionBoardRow {
+  id: string;
+  identifier: string;
   title: string;
   status: string;
-  /** Everything below the root, to the same depth bound the detail view uses. */
+  level: MissionLevel;
+  depth: number;
+  /**
+   * This unit says what it is and its parentage says otherwise — an objective
+   * with no mission over it, say. Not an error: a thing to go and look at.
+   */
+  orphan: boolean;
+  /**
+   * False when the rung came from depth rather than from anyone saying so. An
+   * undeclared unit can never be an orphan, which is what keeps the signal
+   * meaningful in a workspace full of issues nobody has labelled.
+   */
+  declared: boolean;
+  parent?: MissionBoardRef;
+  campaign: MissionBoardRef;
   units: number;
   done: number;
   open_hands: number;
@@ -249,7 +281,10 @@ export interface MissionSummary {
   updated_at: string;
 }
 
-export interface MissionListResponse {
-  missions: MissionSummary[];
+export interface MissionBoardResponse {
+  /** Every rung, including the empty ones, so the tabs never move. */
+  levels: MissionBoardLevel[];
+  level: MissionLevel;
+  rows: MissionBoardRow[];
   max_depth: number;
 }

@@ -11,6 +11,122 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countIssueAncestors = `-- name: CountIssueAncestors :one
+WITH RECURSIVE up AS (
+    SELECT i.id, i.parent_issue_id, 0::int AS height
+    FROM issue i
+    WHERE i.id = $1
+
+    UNION ALL
+
+    SELECT p.id, p.parent_issue_id, u.height + 1
+    FROM issue p
+    JOIN up u ON u.parent_issue_id = p.id
+    WHERE u.height + 1 <= $2::int
+)
+SELECT COALESCE(MAX(height), 0)::int AS ancestors FROM up
+`
+
+type CountIssueAncestorsParams struct {
+	IssueID  pgtype.UUID `json:"issue_id"`
+	MaxDepth int32       `json:"max_depth"`
+}
+
+// How many parents sit above this issue, so its rung is its TRUE depth.
+//
+// The tree query numbers depth from the root it was asked for. That is right
+// for layout and wrong for the ladder: open the view on a mission and its own
+// root would be numbered 0 and labelled a campaign. This walks up instead, so
+// a unit's rung is the same wherever you entered from.
+//
+// Bounded by the same depth guard as the walk down. An issue deeper than the
+// bound reports the bound, which floors it at `step` — the right answer, since
+// everything past the bound is a step anyway.
+func (q *Queries) CountIssueAncestors(ctx context.Context, arg CountIssueAncestorsParams) (int32, error) {
+	row := q.db.QueryRow(ctx, countIssueAncestors, arg.IssueID, arg.MaxDepth)
+	var ancestors int32
+	err := row.Scan(&ancestors)
+	return ancestors, err
+}
+
+const countIssuesByLevel = `-- name: CountIssuesByLevel :many
+
+WITH RECURSIVE walk AS (
+    SELECT i.id, i.parent_issue_id, i.level, 0::int AS depth
+    FROM issue i
+    WHERE i.workspace_id = $1 AND i.parent_issue_id IS NULL
+
+    UNION ALL
+
+    SELECT c.id, c.parent_issue_id, c.level, w.depth + 1
+    FROM issue c
+    JOIN walk w ON c.parent_issue_id = w.id
+    WHERE w.depth + 1 <= $2::int
+),
+rung AS (
+    SELECT
+        w.level AS declared,
+        CASE
+            WHEN w.depth = 0 THEN 'campaign'
+            WHEN w.depth = 1 THEN 'mission'
+            WHEN w.depth = 2 THEN 'objective'
+            WHEN w.depth = 3 THEN 'task'
+            ELSE 'step'
+        END AS derived
+    FROM walk w
+)
+SELECT
+    COALESCE(declared, derived)::text                                   AS level,
+    COUNT(*)::int                                                       AS total,
+    -- The disagreement. Declared and parentage do not agree, which is the only
+    -- thing that makes an orphan findable at all.
+    COUNT(*) FILTER (WHERE declared IS NOT NULL AND declared <> derived)::int AS orphans
+FROM rung
+GROUP BY 1
+`
+
+type CountIssuesByLevelParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	MaxDepth    int32       `json:"max_depth"`
+}
+
+type CountIssuesByLevelRow struct {
+	Level   string `json:"level"`
+	Total   int32  `json:"total"`
+	Orphans int32  `json:"orphans"`
+}
+
+// ── The leveled board ───────────────────────────────────────────────────────
+//
+// Two queries, both over one recursive walk of the workspace. The walk carries
+// three things nothing else can give a row: its depth (so an undeclared issue
+// still has a rung), its root (so the board can filter to one campaign), and
+// its declared level (so a disagreement with depth is visible as an orphan).
+//
+// The depth→rung CASE is duplicated in Go as missionLevel(). That is deliberate
+// and it is the smaller evil: the alternative is shipping every issue in the
+// workspace to Go to be labelled. A test pins the two together.
+// How many units sit at each rung, and how many of them are orphans.
+func (q *Queries) CountIssuesByLevel(ctx context.Context, arg CountIssuesByLevelParams) ([]CountIssuesByLevelRow, error) {
+	rows, err := q.db.Query(ctx, countIssuesByLevel, arg.WorkspaceID, arg.MaxDepth)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountIssuesByLevelRow{}
+	for rows.Next() {
+		var i CountIssuesByLevelRow
+		if err := rows.Scan(&i.Level, &i.Total, &i.Orphans); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getMissionCampaign = `-- name: GetMissionCampaign :one
 
 SELECT p.id, p.title, p.icon, p.status
@@ -47,6 +163,132 @@ func (q *Queries) GetMissionCampaign(ctx context.Context, issueID pgtype.UUID) (
 		&i.Status,
 	)
 	return i, err
+}
+
+const listIssuesAtLevel = `-- name: ListIssuesAtLevel :many
+WITH RECURSIVE walk AS (
+    SELECT i.id, i.parent_issue_id, i.level, 0::int AS depth, i.id AS root_id
+    FROM issue i
+    WHERE i.workspace_id = $4 AND i.parent_issue_id IS NULL
+
+    UNION ALL
+
+    SELECT c.id, c.parent_issue_id, c.level, w.depth + 1, w.root_id
+    FROM issue c
+    JOIN walk w ON c.parent_issue_id = w.id
+    WHERE w.depth + 1 <= $5::int
+),
+rung AS (
+    SELECT
+        w.id, w.parent_issue_id, w.level, w.depth, w.root_id,
+        CASE
+            WHEN w.depth = 0 THEN 'campaign'
+            WHEN w.depth = 1 THEN 'mission'
+            WHEN w.depth = 2 THEN 'objective'
+            WHEN w.depth = 3 THEN 'task'
+            ELSE 'step'
+        END AS derived
+    FROM walk w
+)
+SELECT
+    i.id,
+    i.number,
+    i.title,
+    i.status,
+    i.updated_at,
+    i.last_activity_at,
+    r.depth,
+    r.level                                        AS declared_level,
+    COALESCE(r.level, r.derived)::text             AS level,
+    (r.level IS NOT NULL AND r.level <> r.derived) AS orphan,
+    r.root_id                                      AS campaign_id,
+    root.number                                    AS campaign_number,
+    root.title                                     AS campaign_title,
+    parent.number                                  AS parent_number,
+    parent.title                                   AS parent_title
+FROM rung r
+JOIN issue i ON i.id = r.id
+JOIN issue root ON root.id = r.root_id
+LEFT JOIN issue parent ON parent.id = r.parent_issue_id
+WHERE COALESCE(r.level, r.derived) = $1::text
+  -- Both filters are optional and independent: "orphans only", "one campaign",
+  -- or both at once.
+  AND (NOT $2::boolean OR (r.level IS NOT NULL AND r.level <> r.derived))
+  AND ($3::uuid IS NULL OR r.root_id = $3::uuid)
+ORDER BY i.last_activity_at DESC NULLS LAST, i.number DESC
+`
+
+type ListIssuesAtLevelParams struct {
+	Level       string      `json:"level"`
+	OrphansOnly bool        `json:"orphans_only"`
+	CampaignID  pgtype.UUID `json:"campaign_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	MaxDepth    int32       `json:"max_depth"`
+}
+
+type ListIssuesAtLevelRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	Number         int32              `json:"number"`
+	Title          string             `json:"title"`
+	Status         string             `json:"status"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	LastActivityAt pgtype.Timestamptz `json:"last_activity_at"`
+	Depth          int32              `json:"depth"`
+	DeclaredLevel  pgtype.Text        `json:"declared_level"`
+	Level          string             `json:"level"`
+	Orphan         pgtype.Bool        `json:"orphan"`
+	CampaignID     pgtype.UUID        `json:"campaign_id"`
+	CampaignNumber int32              `json:"campaign_number"`
+	CampaignTitle  string             `json:"campaign_title"`
+	ParentNumber   pgtype.Int4        `json:"parent_number"`
+	ParentTitle    pgtype.Text        `json:"parent_title"`
+}
+
+// Every unit at one rung, with what it hangs from.
+//
+// root_id is the campaign the unit belongs to — carried down the walk rather
+// than re-derived per row, which is what lets the board filter to one campaign
+// without a query per unit.
+func (q *Queries) ListIssuesAtLevel(ctx context.Context, arg ListIssuesAtLevelParams) ([]ListIssuesAtLevelRow, error) {
+	rows, err := q.db.Query(ctx, listIssuesAtLevel,
+		arg.Level,
+		arg.OrphansOnly,
+		arg.CampaignID,
+		arg.WorkspaceID,
+		arg.MaxDepth,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListIssuesAtLevelRow{}
+	for rows.Next() {
+		var i ListIssuesAtLevelRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Number,
+			&i.Title,
+			&i.Status,
+			&i.UpdatedAt,
+			&i.LastActivityAt,
+			&i.Depth,
+			&i.DeclaredLevel,
+			&i.Level,
+			&i.Orphan,
+			&i.CampaignID,
+			&i.CampaignNumber,
+			&i.CampaignTitle,
+			&i.ParentNumber,
+			&i.ParentTitle,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listMissionIssueUsage = `-- name: ListMissionIssueUsage :many

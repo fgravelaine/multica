@@ -229,3 +229,131 @@ LEFT JOIN LATERAL (
 -- The root itself is not one of its own units.
 WHERE t.node_id <> t.mission_id
 GROUP BY t.mission_id, n.status;
+
+-- name: CountIssueAncestors :one
+-- How many parents sit above this issue, so its rung is its TRUE depth.
+--
+-- The tree query numbers depth from the root it was asked for. That is right
+-- for layout and wrong for the ladder: open the view on a mission and its own
+-- root would be numbered 0 and labelled a campaign. This walks up instead, so
+-- a unit's rung is the same wherever you entered from.
+--
+-- Bounded by the same depth guard as the walk down. An issue deeper than the
+-- bound reports the bound, which floors it at `step` — the right answer, since
+-- everything past the bound is a step anyway.
+WITH RECURSIVE up AS (
+    SELECT i.id, i.parent_issue_id, 0::int AS height
+    FROM issue i
+    WHERE i.id = @issue_id
+
+    UNION ALL
+
+    SELECT p.id, p.parent_issue_id, u.height + 1
+    FROM issue p
+    JOIN up u ON u.parent_issue_id = p.id
+    WHERE u.height + 1 <= @max_depth::int
+)
+SELECT COALESCE(MAX(height), 0)::int AS ancestors FROM up;
+
+-- ── The leveled board ───────────────────────────────────────────────────────
+--
+-- Two queries, both over one recursive walk of the workspace. The walk carries
+-- three things nothing else can give a row: its depth (so an undeclared issue
+-- still has a rung), its root (so the board can filter to one campaign), and
+-- its declared level (so a disagreement with depth is visible as an orphan).
+--
+-- The depth→rung CASE is duplicated in Go as missionLevel(). That is deliberate
+-- and it is the smaller evil: the alternative is shipping every issue in the
+-- workspace to Go to be labelled. A test pins the two together.
+
+-- name: CountIssuesByLevel :many
+-- How many units sit at each rung, and how many of them are orphans.
+WITH RECURSIVE walk AS (
+    SELECT i.id, i.parent_issue_id, i.level, 0::int AS depth
+    FROM issue i
+    WHERE i.workspace_id = @workspace_id AND i.parent_issue_id IS NULL
+
+    UNION ALL
+
+    SELECT c.id, c.parent_issue_id, c.level, w.depth + 1
+    FROM issue c
+    JOIN walk w ON c.parent_issue_id = w.id
+    WHERE w.depth + 1 <= @max_depth::int
+),
+rung AS (
+    SELECT
+        w.level AS declared,
+        CASE
+            WHEN w.depth = 0 THEN 'campaign'
+            WHEN w.depth = 1 THEN 'mission'
+            WHEN w.depth = 2 THEN 'objective'
+            WHEN w.depth = 3 THEN 'task'
+            ELSE 'step'
+        END AS derived
+    FROM walk w
+)
+SELECT
+    COALESCE(declared, derived)::text                                   AS level,
+    COUNT(*)::int                                                       AS total,
+    -- The disagreement. Declared and parentage do not agree, which is the only
+    -- thing that makes an orphan findable at all.
+    COUNT(*) FILTER (WHERE declared IS NOT NULL AND declared <> derived)::int AS orphans
+FROM rung
+GROUP BY 1;
+
+-- name: ListIssuesAtLevel :many
+-- Every unit at one rung, with what it hangs from.
+--
+-- root_id is the campaign the unit belongs to — carried down the walk rather
+-- than re-derived per row, which is what lets the board filter to one campaign
+-- without a query per unit.
+WITH RECURSIVE walk AS (
+    SELECT i.id, i.parent_issue_id, i.level, 0::int AS depth, i.id AS root_id
+    FROM issue i
+    WHERE i.workspace_id = @workspace_id AND i.parent_issue_id IS NULL
+
+    UNION ALL
+
+    SELECT c.id, c.parent_issue_id, c.level, w.depth + 1, w.root_id
+    FROM issue c
+    JOIN walk w ON c.parent_issue_id = w.id
+    WHERE w.depth + 1 <= @max_depth::int
+),
+rung AS (
+    SELECT
+        w.*,
+        CASE
+            WHEN w.depth = 0 THEN 'campaign'
+            WHEN w.depth = 1 THEN 'mission'
+            WHEN w.depth = 2 THEN 'objective'
+            WHEN w.depth = 3 THEN 'task'
+            ELSE 'step'
+        END AS derived
+    FROM walk w
+)
+SELECT
+    i.id,
+    i.number,
+    i.title,
+    i.status,
+    i.updated_at,
+    i.last_activity_at,
+    r.depth,
+    r.level                                        AS declared_level,
+    COALESCE(r.level, r.derived)::text             AS level,
+    (r.level IS NOT NULL AND r.level <> r.derived) AS orphan,
+    r.root_id                                      AS campaign_id,
+    root.number                                    AS campaign_number,
+    root.title                                     AS campaign_title,
+    parent.number                                  AS parent_number,
+    parent.title                                   AS parent_title
+FROM rung r
+JOIN issue i ON i.id = r.id
+JOIN issue root ON root.id = r.root_id
+LEFT JOIN issue parent ON parent.id = r.parent_issue_id
+WHERE COALESCE(r.level, r.derived) = @level::text
+  -- Both filters are optional and independent: "orphans only", "one campaign",
+  -- or both at once.
+  AND (NOT @orphans_only::boolean OR (r.level IS NOT NULL AND r.level <> r.derived))
+  AND (sqlc.narg('campaign_id')::uuid IS NULL OR r.root_id = sqlc.narg('campaign_id')::uuid)
+ORDER BY i.last_activity_at DESC NULLS LAST, i.number DESC;
