@@ -152,6 +152,10 @@ function MissionHeader({ data, issueHref }: { data: MissionResponse; issueHref: 
 
   const objectives = data.nodes.filter((n) => n.level === "objective").length;
   const tasks = data.nodes.filter((n) => n.level === "task").length;
+  // Steps are deliberately not counted here. They are below the reporting
+  // line — the number of them is the unit's business, not the mission's, and
+  // putting it in the header would undo the distinction the rung makes.
+  const steps = data.nodes.filter((n) => n.level === "step").length;
 
   return (
     <header className="mb-6 border-b pb-4">
@@ -193,6 +197,9 @@ function MissionHeader({ data, issueHref }: { data: MissionResponse; issueHref: 
         <span>
           {objectives} {objectives === 1 ? "objective" : "objectives"} · {tasks}{" "}
           {tasks === 1 ? "task" : "tasks"}
+          {steps > 0 ? (
+            <span className="text-muted-foreground/60"> · {steps} folded</span>
+          ) : null}
         </span>
         {totals.metered > 0 ? (
           <span>

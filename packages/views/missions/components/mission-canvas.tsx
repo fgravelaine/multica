@@ -59,7 +59,7 @@ const GAP_Y = 16;
  * this tree, it is the project the mission belongs to, and the header states
  * it rather than the canvas drawing a column for it.
  */
-const LEVEL_COLUMNS = ["Mission", "Objectives", "Tasks"] as const;
+const LEVEL_COLUMNS = ["Mission", "Objectives", "Tasks", "Steps"] as const;
 
 /** How a node's stage stands, so the chip can carry the barrier's own words. */
 type StageState = "closed" | "frontier" | "ahead" | "none";
@@ -368,6 +368,8 @@ function Canvas({
         continue;
       }
       const parent = data.nodes.find((n) => n.id === node.parent_id);
+      // A task's children are steps, and a step is folded by definition —
+      // that fold is the whole content of the task/step boundary.
       if (parent?.level === "task" && !unfolded.has(parent.id)) {
         hidden.add(node.id);
         folded.set(parent.id, (folded.get(parent.id) ?? 0) + 1);

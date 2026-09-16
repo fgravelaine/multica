@@ -42,7 +42,8 @@ import { ActorAvatar } from "../../common/actor-avatar";
 const LEVEL_MEANS: Record<MissionLevel, string> = {
   mission: "carries the intent and the end state. Only a human writes one.",
   objective: "must be taken and held for the mission to succeed. You can tell whether you hold it.",
-  task: "what one unit is ordered to do.",
+  task: "what one unit is ordered to do, and reports on.",
+  step: "how a task gets done. Below the reporting line — folded until asked for.",
 };
 
 /** 1e-10 USD per tick — server/pkg/agent.CostUSDTicksPerUSD. */
@@ -177,7 +178,7 @@ export function MissionUnitDrawer({
                 <Row label="Depth">
                   {node.depth === 0 ? "the mission root" : `${node.depth} below the root`}
                 </Row>
-                <Row label={node.level === "task" ? "Breaks into" : "Children"}>
+                <Row label={node.level === "task" ? "Steps" : "Children"}>
                   {children.length === 0 ? (
                     <span className="text-muted-foreground">none</span>
                   ) : (
@@ -189,7 +190,7 @@ export function MissionUnitDrawer({
                           business, not the mission's. */}
                       {node.level === "task" ? (
                         <span className="ml-2 text-muted-foreground">
-                          still tasks — folded on the canvas
+                          folded on the canvas
                         </span>
                       ) : null}
                     </>

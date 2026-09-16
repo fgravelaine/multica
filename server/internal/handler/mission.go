@@ -97,7 +97,8 @@ type MissionNode struct {
 	//   mission   — task + purpose. Carries the intent and the end state.
 	//   objective — what must be taken and held for the mission to succeed.
 	//               Decisive: you can tell whether you hold it.
-	//   task      — what one unit is ordered to do.
+	//   task      — what one unit is ordered to do AND REPORTS ON.
+	//   step      — how it does it. Below the reporting line.
 	//
 	// READ THIS BEFORE BUILDING ON IT. The words are borrowed from military
 	// usage, where each is precise about what a thing obliges. The ORDERING is
@@ -112,6 +113,9 @@ type MissionNode struct {
 	//   mission/objective  SHAPE ONLY. A root is parent_issue_id IS NULL, so it
 	//                      has no parent to wake. Nothing else differs.
 	//   objective/task     NOTHING. No code anywhere keys on depth.
+	//   task/step          REAL, and the only rung this view itself creates:
+	//                      a step is folded on the canvas until asked for.
+	//                      That is what a step IS — below the reporting line.
 	//
 	// So objective/task is a WRITING DISCIPLINE, not a rule this server keeps:
 	// a title at depth 1 has to answer "what does this promise, and can you tell
@@ -120,11 +124,12 @@ type MissionNode struct {
 	// this field. Do not add behaviour keyed on Level without first giving the
 	// boundary a real consequence.
 	//
-	// The FLOOR is the one part with a hard argument: a task with children is
-	// still a task, because dispatch ignores depth and parentage, the barrier is
-	// per parent at every level, and a hand can be raised anywhere — so a fourth
-	// rung would name nothing. That same argument is why this comment claims no
-	// more for objective than it can carry.
+	// The FLOOR is step, and it earns the name on the fold rather than on the
+	// server: dispatch ignores depth and parentage, the barrier is per parent at
+	// every level, and a hand can be raised anywhere — so nothing below task
+	// behaves differently. What differs is what the MISSION tracks, and that is
+	// a real difference this view makes and keeps. A step's own children are
+	// inside a folded step, so the ladder a reader sees never repeats a name.
 	//
 	// A squad never appears here: a squad RECEIVES a task. Squad is who,
 	// objective is what — and naming a level after its assignee would be a lie
@@ -188,17 +193,25 @@ const (
 	levelMission   = "mission"
 	levelObjective = "objective"
 	levelTask      = "task"
+	levelStep      = "step"
 )
 
 // missionLevel maps depth to what the unit is. See MissionNode.Level.
+//
+// Step absorbs depth 3 and everything below, and that is not the repetition it
+// looks like: a step's own children are inside a FOLDED step, so they are never
+// read as a rung. The ladder a reader sees is four deep and each name is used
+// once.
 func missionLevel(depth int32) string {
 	switch depth {
 	case 0:
 		return levelMission
 	case 1:
 		return levelObjective
-	default:
+	case 2:
 		return levelTask
+	default:
+		return levelStep
 	}
 }
 

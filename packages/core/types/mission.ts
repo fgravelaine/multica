@@ -35,13 +35,12 @@ export interface MissionNodeUsage {
  * no code keys on depth. The full accounting is on MissionNode.Level, server
  * side; read it before building behaviour on this field.
  *
- * There is no `subtask`, and THAT is backed: dispatch never looks at depth or
- * parentage, the barrier is per parent at every level, and a hand can be raised
- * anywhere, so a fourth rung would name nothing. A task inside a task is still
- * a task — `subtask` is a relation, and the view treats it as one by folding
- * it.
+ * `step` is the floor and earns its name on the FOLD, not on the server:
+ * nothing below a task behaves differently, but a step is below the reporting
+ * line and the canvas keeps it folded until asked. Depth 4 and below are steps
+ * too — inside a folded step, so a reader never meets the name twice.
  */
-export type MissionLevel = "mission" | "objective" | "task";
+export type MissionLevel = "mission" | "objective" | "task" | "step";
 
 export interface MissionNode {
   id: string;
