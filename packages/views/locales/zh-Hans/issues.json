@@ -104,7 +104,7 @@
   },
   "status": {
     "backlog": "待规划",
-    "todo": "待办",
+    "todo": "就绪",
     "in_progress": "进行中",
     "in_review": "审核中",
     "done": "已完成",
@@ -814,7 +814,7 @@
     "description": "这个任务处于待规划状态，被分配的智能体会等待。准备启动时把它移到 todo。",
     "row_backlog_label": "backlog",
     "row_backlog_hint": "智能体保持暂停",
-    "row_todo_label": "todo",
+    "row_todo_label": "就绪",
     "row_todo_hint": "启动智能体"
   },
   "save_view": {

@@ -106,7 +106,7 @@
   },
   "status": {
     "backlog": "Backlog",
-    "todo": "Todo",
+    "todo": "Ready",
     "in_progress": "In Progress",
     "in_review": "In Review",
     "done": "Done",
@@ -845,7 +845,7 @@
     "description": "This issue is parked, so the assigned agent will wait. Move it to Todo when you want the agent to start.",
     "row_backlog_label": "Backlog",
     "row_backlog_hint": "keeps the agent paused",
-    "row_todo_label": "Todo",
+    "row_todo_label": "Ready",
     "row_todo_hint": "starts the agent"
   },
   "save_view": {

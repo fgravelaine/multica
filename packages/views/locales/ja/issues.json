@@ -104,7 +104,7 @@
   },
   "status": {
     "backlog": "バックログ",
-    "todo": "未着手",
+    "todo": "準備完了",
     "in_progress": "進行中",
     "in_review": "レビュー中",
     "done": "完了",
@@ -814,7 +814,7 @@
     "description": "このタスクは保留中のため、割り当てられたエージェントは待機します。エージェントを開始したいときは未着手に移動してください。",
     "row_backlog_label": "バックログ",
     "row_backlog_hint": "エージェントを一時停止のままにします",
-    "row_todo_label": "未着手",
+    "row_todo_label": "準備完了",
     "row_todo_hint": "エージェントを開始します"
   },
   "save_view": {
