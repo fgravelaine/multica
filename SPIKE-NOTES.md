@@ -1,4 +1,4 @@
-# Spike notes — task-level routing and the raised hand
+# Spike notes — task-level routing, the raised hand, and the mission view
 
 Throwaway fork. Not a contribution. Nothing here is written for a maintainer.
 
@@ -451,8 +451,152 @@ status was `backlog` re-enqueues a run. So anything that wants to park and
 resume must borrow `backlog`, conflating "never started" with "stopped
 mid-flight for a decision". Park-and-resume is an edge, not a capability.
 
+# Part two — the mission view, and what it dragged in
+
+Everything above was answered by 2026-09-14. What follows was a second brief: a
+read-only view answering the one question the board cannot — where is a mission,
+and what is waiting on me. It resisted more than the first two, and most of what
+it taught came from being looked at rather than reasoned about.
+
+## 8. The view was built twice, because the first shape was wrong
+
+A scrolling document with the waiting list first. Defensible on paper and wrong
+in the hand: "where is this" is a shape, and a list answers it one row at a
+time. Rebuilt as a canvas (`@xyflow/react`, the React port of what n8n uses),
+pan and zoom, one column per depth. The layout is four lines, not a dependency —
+it is a tree, not a graph, so `dagre` would have bought nothing.
+
+Three defects only looking found. React Flow needs a node's height before it
+renders, so a node sized to its own title pushes its text out of its box. The
+minimap reads MEASURED sizes, so a custom node draws an empty grey square until
+the sizes are declared. And the page did not scroll at all — `SidebarInset` is
+`h-svh overflow-hidden`, so a page carrying no scroll container of its own is
+cut at the fold. None of these were reachable by reading the code.
+
+## 9. The vocabulary, and what it is actually backed by
+
+Campaign → Mission → Objective → Task → Step, stored on `issue.level`.
+
+The words are borrowed from military usage, where each is precise about what a
+thing obliges. **The ordering is not doctrinal** — doctrine does not rank them;
+a squad has a mission, an objective is assigned at any echelon, and its
+hierarchy is units, not work items. Claiming otherwise was overreach, corrected
+in a6805ec1a.
+
+Checked boundary by boundary against the server:
+
+| boundary | backed by |
+|---|---|
+| project / campaign | the product's own entity, a flat per-issue tag |
+| campaign / mission | shape only — a campaign has no parent to wake |
+| mission / objective | **nothing.** No code keys on depth |
+| objective / task | **nothing**, likewise |
+| task / step | real — a step is folded, below the reporting line |
+
+So `objective` is a WRITING DISCIPLINE, not a rule the server keeps: a title at
+depth 2 must answer "what does this promise, and can you tell whether you hold
+it?". It earns its place by catching a real defect — "Empty state" sitting where
+an objective belongs — not by being enforced.
+
+The same argument cuts both ways and that is why it is worth writing down: the
+reason a `subtask` rung was rejected ("nothing changes below depth 2") rejects
+`objective` exactly as hard. `step` survives only because the view itself folds
+it.
+
+## 10. A derived rung cannot express an orphan — the reason `level` is stored
+
+An objective triggered on its own has no parent, so depth says 0, so it IS a
+campaign. The thing you are looking for and the thing it is mistaken for are
+byte-identical, and no filter separates them.
+
+Storing the rung makes the orphan a DISAGREEMENT: declared against parentage.
+NULL means undeclared and falls back to depth, so nothing existing changes
+meaning, and a unit only becomes capable of being an orphan once somebody states
+what it was meant to be. Reparenting deliberately does not rewrite a declared
+level — healing it silently is how the signal is lost.
+
+An orphan is **not an error**. It is work that started before the thing above it
+existed, which is most of how work actually starts. Nothing in the UI paints it
+red.
+
+## 11. The second wall: a wait cannot cross a parent
+
+The stage barrier orders SIBLINGS under one parent. It cannot say "this task
+waits on a task in another mission, owned by another squad" — the ordinary case
+the moment two teams share a release.
+
+`issue_dependency` is the product's own table for exactly that, present since
+migration 034 with a blocks/blocked_by/related type, and **dead**: no query, no
+API, no client type, no UI, no rows. The only code touching it was the
+workspace-deletion manifest.
+
+Unlike migration 251's CHECK, this was not a wall — it was an empty room. It now
+has a reader, a writer and a CLI. The two kinds of wait are kept apart
+everywhere because they do not clear the same way: a barrier clears when the
+stage below closes, a dependency clears when one named thing is finished,
+possibly by people who have never heard of this mission.
+
+## 12. Per-rung run settings cost one field, and no daemon change
+
+An agent carries one model, one thinking level and one service tier. "The same
+agent, cheap here and expensive there" therefore means COPYING the agent — and a
+copied persona splits its raised hands, its contest ratio and its autonomy
+numbers across the copies.
+
+Traced the dispatch path expecting a wall and did not find one. The payload has
+carried `Model`, `ThinkingLevel` and `ServiceTier` on every claim all along;
+the daemon already qualifies the model per provider, validates the tier against
+that model's catalog, and degrades rather than failing. The only thing that was
+not per-task was where the value came from.
+
+So `level_policy` is a table and three lines at the claim's issue load. No
+protocol change, no daemon change, no client upgrade. This is the clearest
+"reducible" answer in the whole spike, and it is the opposite of finding 3.
+
+**And it may be the wrong idea.** Measured on ~22 runs: tokens per run did not
+vary by rung — 126k, 122k, 117k across campaign, mission and objective. The rung
+is a claim about scope and blast radius, not a measurement of difficulty. It was
+built anyway, as a deliberate bet, because there is no real data yet. The first
+thing to check once there is: whether it held. The alternative needing no
+prediction is reactive — run cheap, escalate a notch on failure, raise a hand on
+the second.
+
+## 13. The house gates are good, and caught six things
+
+Not a courtesy. In order: the workspace-deletion manifest caught `raised_hand`,
+then `referential`, then `level_policy`. The route registry made a nav page
+without an icon a compile error. The palette's keyword `Record` made a page
+without search terms one. Locale parity made an English-only label one.
+`IssueToMap` and the CLI's `validIssueFields` both caught `level` the moment it
+reached the wire. Every one was right and every one was fixed rather than
+excluded.
+
+Two conventions the repo warned about in comments I was editing next to, and I
+got wrong anyway on the first pass: Base UI items take `onClick`, not
+`onSelect` — an `onSelect` typechecks and lands silently on the DOM node. And
+`invalidateQueries` needs `issueKeys.all(wsId)`; a hand-written `["issue"]`
+matches nothing, which is how a write reached the database while the panel kept
+reading "Undeclared".
+
 ## What was NOT done
 
+- **No UI for `level_policy`.** CLI and API only. The rung settings are the one
+  part of the ladder a human cannot set from the product.
+- **No cycle check on dependencies**, deliberately: two units each waiting on
+  the other is a real thing a team does to itself, and it is better seen than
+  refused.
+- **Silent tier degradation.** The daemon drops an unsupported tier and logs it.
+  Per-agent that is fine; per-rung, "I asked for high and got standard" happens
+  inside a run and nothing surfaces it. Surfacing it IS a protocol change.
+- **Routing and model untested together.** Route a task to `provider:opencode`
+  while naming a Claude model and `qualifyTaskModel` has to reconcile them. The
+  spike has never sent both.
+- **`TestCommentSourceContextLifecycle` fails**, on this branch and on a clean
+  `origin/main` against a clean database built from main's own migrations. The
+  test harness passes a nil `storage.Storage` and the source-context capture
+  copies attachments through it; the test has a skip guard for "no database" and
+  none for "no storage". Not a Multica defect — an environment dependency this
+  stack does not provide.
 - No recipient, so no lead-first routing and no two counters.
 - The answer comment is best-effort. If it fails the promotion still fires and a
   run resumes with the decision missing from its feed. Correct is one
@@ -472,6 +616,12 @@ mid-flight for a decision". Park-and-resume is an edge, not a capability.
 - [x] raised hand spike — works end to end from CLI and UI
 - [x] 6738 tests passing
 - [x] report
+- [x] mission view — canvas, panel, per-unit drawer
+- [x] the referential, made real (catalog, not a stand-in)
+- [x] the lead as a recipient; contest ratio per lead, and on exposed metrics
+- [x] the leveled board, and orphans that can be found
+- [x] a wait that crosses a tree — issue_dependency brought to life
+- [x] what a rung runs on — level_policy, no daemon change
 
 Whether any of this is worth proposing upstream is a decision for later and was
 not part of this session.
