@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
@@ -135,6 +136,100 @@ func runWaitsOn(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// ── What a rung costs to run ────────────────────────────────────────────────
+
+var levelPolicyCmd = &cobra.Command{
+	Use:   "level-policy [rung]",
+	Short: "What a rung runs on — model, thinking, service tier",
+	Long: "An agent carries ONE model, one thinking level and one service tier,\n" +
+		"so having the same agent run cheaply here and expensively there means\n" +
+		"copying it — and a copied persona splits its raised hands, its contest\n" +
+		"ratio and its autonomy numbers across the copies.\n\n" +
+		"This puts the three settings on the RUNG instead. One persona keeps one\n" +
+		"identity, and the level of the work decides how it runs.\n\n" +
+		"The agent's own settings are the fallback, not the winner: a rung with\n" +
+		"no policy runs on whatever the agent says, exactly as before.\n\n" +
+		"Pass no rung to list the ladder. Pass a rung with no flags to clear it.\n\n" +
+		"Examples:\n" +
+		"  multica level-policy\n" +
+		"  multica level-policy step --model haiku --thinking low\n" +
+		"  multica level-policy step",
+	Args: cobra.MaximumNArgs(1),
+	RunE: runLevelPolicy,
+}
+
+func runLevelPolicy(cmd *cobra.Command, args []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+
+	if len(args) == 0 {
+		var resp struct {
+			Policies []map[string]any `json:"policies"`
+		}
+		if err := client.GetJSON(ctx, "/api/level-policies", &resp); err != nil {
+			return fmt.Errorf("list level policies: %w", err)
+		}
+		if output, _ := cmd.Flags().GetString("output"); output == "json" {
+			return cli.PrintJSON(os.Stdout, resp.Policies)
+		}
+		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(w, "RUNG\tMODEL\tTHINKING\tTIER")
+		for _, p := range resp.Policies {
+			// A rung with no policy prints dashes rather than blanks: an empty
+			// cell reads as a value nobody typed, a dash reads as "the agent
+			// decides", which is what it means.
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+				strVal(p, "level"),
+				dashIfEmpty(strVal(p, "model")),
+				dashIfEmpty(strVal(p, "thinking_level")),
+				dashIfEmpty(strVal(p, "service_tier")))
+		}
+		return w.Flush()
+	}
+
+	rung := strings.ToLower(strings.TrimSpace(args[0]))
+	if !contains(ladderRungs, rung) {
+		return fmt.Errorf("unknown rung %q: one of %s", rung, strings.Join(ladderRungs, ", "))
+	}
+
+	model, _ := cmd.Flags().GetString("model")
+	thinking, _ := cmd.Flags().GetString("thinking")
+	tier, _ := cmd.Flags().GetString("tier")
+	body := map[string]any{"model": model, "thinking_level": thinking, "service_tier": tier}
+
+	var out map[string]any
+	if err := client.PutJSON(ctx, "/api/level-policies/"+rung, body, &out); err != nil {
+		return fmt.Errorf("set level policy: %w", err)
+	}
+	if model == "" && thinking == "" && tier == "" {
+		fmt.Fprintf(os.Stderr, "%s runs on whatever its agent says.\n", rung)
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "%s runs on %s.\n", rung, strings.Join(nonEmpty(model, thinking, tier), " · "))
+	return nil
+}
+
+func dashIfEmpty(value string) string {
+	if value == "" {
+		return "—"
+	}
+	return value
+}
+
+func nonEmpty(values ...string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
 func contains(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
@@ -146,4 +241,9 @@ func contains(values []string, want string) bool {
 
 func init() {
 	waitsOnCmd.Flags().Bool("remove", false, "Drop the wait instead of declaring it")
+
+	levelPolicyCmd.Flags().String("model", "", "Model this rung runs on")
+	levelPolicyCmd.Flags().String("thinking", "", "Thinking level this rung runs on")
+	levelPolicyCmd.Flags().String("tier", "", "Service tier this rung runs on")
+	levelPolicyCmd.Flags().String("output", "table", "Output format: table or json")
 }

@@ -2488,6 +2488,12 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		resp.ThreadName = issue.Title
 		issueNumber = issue.Number
 
+		// SPIKE: what a rung costs to run. Applied HERE and not where
+		// resp.Agent is assembled, because the rung is a fact about the ISSUE
+		// and the issue is not loaded until this point. resp.Agent is a
+		// pointer, so this reaches the payload already built above.
+		h.applyLevelPolicy(r.Context(), resp.Agent, issue)
+
 		// Squad-leader briefing injection: keyed off the task being a
 		// leader-task (is_leader_task) carrying a squad_id — NOT off the
 		// issue being assigned to a squad. The task flag is stamped at

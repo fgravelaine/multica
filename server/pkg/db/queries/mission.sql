@@ -421,3 +421,30 @@ DELETE FROM issue_dependency
 WHERE issue_id = @issue_id
   AND depends_on_issue_id = @depends_on_issue_id
   AND type = 'blocked_by';
+
+-- ── What a rung costs to run ────────────────────────────────────────────────
+
+-- name: ListLevelPolicies :many
+-- Every rung policy in the workspace. Read once per claim, and empty for a
+-- workspace that has set none — which is the default and costs one small
+-- indexed read.
+SELECT id, level, model, thinking_level, service_tier, updated_at
+FROM level_policy
+WHERE workspace_id = @workspace_id
+ORDER BY level;
+
+-- name: UpsertLevelPolicy :one
+-- Set what a rung runs on. Each field is independently clearable, which is why
+-- this is a full replace rather than a COALESCE merge: a merge cannot express
+-- "stop overriding the model but keep overriding thinking".
+INSERT INTO level_policy (workspace_id, level, model, thinking_level, service_tier)
+VALUES (@workspace_id, @level, sqlc.narg(model), sqlc.narg(thinking_level), sqlc.narg(service_tier))
+ON CONFLICT (workspace_id, level) DO UPDATE
+SET model          = EXCLUDED.model,
+    thinking_level = EXCLUDED.thinking_level,
+    service_tier   = EXCLUDED.service_tier,
+    updated_at     = now()
+RETURNING *;
+
+-- name: DeleteLevelPolicy :exec
+DELETE FROM level_policy WHERE workspace_id = @workspace_id AND level = @level;

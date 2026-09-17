@@ -2014,6 +2014,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// a mission is a derivation (a top-level issue with children), not
 			// a thing you create, so there is nothing here to POST to.
 			r.Get("/api/missions", h.ListMissions)
+			// SPIKE: what a rung costs to run. One persona keeps one identity;
+			// the level of the work picks the model, thinking and tier.
+			r.Get("/api/level-policies", h.ListLevelPolicies)
+			r.Put("/api/level-policies/{level}", h.SetLevelPolicy)
 
 			// Projects
 			r.Route("/api/projects", func(r chi.Router) {

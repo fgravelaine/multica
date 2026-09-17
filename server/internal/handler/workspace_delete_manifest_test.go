@@ -117,6 +117,10 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	// workspace FK's CASCADE. raised_hand.referential_key is deliberately NOT
 	// an FK to it (a hand must outlive the catalog row it names), so the two
 	// are classified independently and neither constrains the other.
+	// SPIKE: level_policy. What a rung runs on, per workspace. Goes with the
+	// workspace on the workspace FK's CASCADE, like referential — it names no
+	// issue and no agent, so nothing else has to be torn down first.
+	"level_policy":                   workspaceDelete,
 	"referential":                    workspaceDelete,
 	"runtime_profile":                workspaceDelete,
 	"schema_migrations":              workspaceDeleteKeep,

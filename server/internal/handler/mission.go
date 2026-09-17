@@ -23,6 +23,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -1685,4 +1686,179 @@ func (h *Handler) ListIssueDependencies(w http.ResponseWriter, r *http.Request) 
 	// looking at", and from one issue there is no tree to be outside of —
 	// sending it would be answering a question nobody asked.
 	writeJSON(w, http.StatusOK, map[string]any{"blocked_by": out})
+}
+
+// applyLevelPolicy overrides a claimed task's model, thinking level and service
+// tier with whatever the issue's RUNG says it should run on.
+//
+// One persona, one identity, and the level of the work picks how it runs —
+// instead of copying an agent per configuration and splitting its raised hands,
+// its contest ratio and its autonomy numbers across the copies.
+//
+// Costs nothing on a workspace that has set no policy: one small indexed read
+// that comes back empty, and the function returns before it looks at anything
+// else. The ancestor walk only happens when a policy exists AND the issue has
+// not declared its own rung.
+//
+// The agent's own settings are the fallback, not the winner. That is the point:
+// "put it at the level" means the level decides, and an agent's model becomes
+// what runs when its rung has no opinion.
+func (h *Handler) applyLevelPolicy(ctx context.Context, agentData *TaskAgentData, issue db.Issue) {
+	if agentData == nil {
+		return
+	}
+	policies, err := h.Queries.ListLevelPolicies(ctx, issue.WorkspaceID)
+	if err != nil || len(policies) == 0 {
+		// A failed lookup runs the task on the agent's settings rather than
+		// refusing the claim. A policy is a preference about cost; it is not
+		// worth stranding work over.
+		return
+	}
+
+	level := issue.Level.String
+	if !issue.Level.Valid || level == "" {
+		// Undeclared: the rung comes from depth, which needs the walk up. Only
+		// reached when the workspace actually has policies.
+		depth, err := h.Queries.CountIssueAncestors(ctx, db.CountIssueAncestorsParams{
+			IssueID:  issue.ID,
+			MaxDepth: int32(missionBoardDepth),
+		})
+		if err != nil {
+			return
+		}
+		level = missionLevel(depth)
+	}
+
+	for _, policy := range policies {
+		if policy.Level != level {
+			continue
+		}
+		// Each field independently: a policy that names only a model must not
+		// silently clear the agent's thinking level.
+		if policy.Model.Valid {
+			agentData.Model = policy.Model.String
+		}
+		if policy.ThinkingLevel.Valid {
+			agentData.ThinkingLevel = policy.ThinkingLevel.String
+		}
+		if policy.ServiceTier.Valid {
+			agentData.ServiceTier = policy.ServiceTier.String
+		}
+		return
+	}
+}
+
+// LevelPolicyEntry is what one rung runs on. A nil field means the rung has no
+// opinion and the agent's own setting stands.
+type LevelPolicyEntry struct {
+	Level         string  `json:"level"`
+	Model         *string `json:"model,omitempty"`
+	ThinkingLevel *string `json:"thinking_level,omitempty"`
+	ServiceTier   *string `json:"service_tier,omitempty"`
+}
+
+// ListLevelPolicies returns every rung, including the ones with no policy, so a
+// reader can see the whole ladder rather than only the rungs someone has
+// already opinionated.
+func (h *Handler) ListLevelPolicies(w http.ResponseWriter, r *http.Request) {
+	wsUUID, ok := parseUUIDOrBadRequest(w, h.resolveWorkspaceID(r), "workspace_id")
+	if !ok {
+		return
+	}
+	rows, err := h.Queries.ListLevelPolicies(r.Context(), wsUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list level policies")
+		return
+	}
+	byLevel := make(map[string]db.ListLevelPoliciesRow, len(rows))
+	for _, row := range rows {
+		byLevel[row.Level] = row
+	}
+	out := make([]LevelPolicyEntry, 0, len(missionRungs))
+	for _, rung := range missionRungs {
+		entry := LevelPolicyEntry{Level: rung}
+		if row, ok := byLevel[rung]; ok {
+			entry.Model = textToPtr(row.Model)
+			entry.ThinkingLevel = textToPtr(row.ThinkingLevel)
+			entry.ServiceTier = textToPtr(row.ServiceTier)
+		}
+		out = append(out, entry)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"policies": out})
+}
+
+// SetLevelPolicy replaces one rung's policy outright.
+//
+// A full replace, not a merge: a merge cannot express "stop overriding the
+// model but keep overriding thinking", and that is a thing somebody will want
+// on the first day they use this.
+func (h *Handler) SetLevelPolicy(w http.ResponseWriter, r *http.Request) {
+	wsUUID, ok := parseUUIDOrBadRequest(w, h.resolveWorkspaceID(r), "workspace_id")
+	if !ok {
+		return
+	}
+	level := chi.URLParam(r, "level")
+	if !slices.Contains(missionRungs, level) {
+		writeError(w, http.StatusBadRequest, "unknown level: "+strings.Join(missionRungs, ", "))
+		return
+	}
+
+	var req struct {
+		Model         *string `json:"model"`
+		ThinkingLevel *string `json:"thinking_level"`
+		ServiceTier   *string `json:"service_tier"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+
+	// All three empty is a delete, not a row that sets nothing — the table's
+	// CHECK would refuse it anyway, and refusing "clear this rung" as a
+	// malformed request would be the wrong answer to a reasonable thing to ask.
+	if isBlank(req.Model) && isBlank(req.ThinkingLevel) && isBlank(req.ServiceTier) {
+		if err := h.Queries.DeleteLevelPolicy(r.Context(), db.DeleteLevelPolicyParams{
+			WorkspaceID: wsUUID,
+			Level:       level,
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to clear level policy")
+			return
+		}
+		writeJSON(w, http.StatusOK, LevelPolicyEntry{Level: level})
+		return
+	}
+
+	// NOT validated against a model catalog here. The catalog is per runtime and
+	// per provider, and a task's runtime is not known until it is claimed — so
+	// the only place the answer exists is the daemon, which already validates
+	// and degrades rather than failing. Rejecting here would mean guessing with
+	// less information than the thing that checks it properly.
+	row, err := h.Queries.UpsertLevelPolicy(r.Context(), db.UpsertLevelPolicyParams{
+		WorkspaceID:   wsUUID,
+		Level:         level,
+		Model:         nargText(req.Model),
+		ThinkingLevel: nargText(req.ThinkingLevel),
+		ServiceTier:   nargText(req.ServiceTier),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to set level policy")
+		return
+	}
+	writeJSON(w, http.StatusOK, LevelPolicyEntry{
+		Level:         row.Level,
+		Model:         textToPtr(row.Model),
+		ThinkingLevel: textToPtr(row.ThinkingLevel),
+		ServiceTier:   textToPtr(row.ServiceTier),
+	})
+}
+
+func isBlank(value *string) bool {
+	return value == nil || strings.TrimSpace(*value) == ""
+}
+
+func nargText(value *string) pgtype.Text {
+	if isBlank(value) {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: strings.TrimSpace(*value), Valid: true}
 }

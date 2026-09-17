@@ -88,6 +88,7 @@ func init() {
 	// wait that stage ordering cannot reach.
 	rootCmd.AddCommand(levelCmd)
 	rootCmd.AddCommand(waitsOnCmd)
+	rootCmd.AddCommand(levelPolicyCmd)
 	rootCmd.AddCommand(chatCmd)
 	rootCmd.AddCommand(daemonCmd)
 	rootCmd.AddCommand(runtimeCmd)

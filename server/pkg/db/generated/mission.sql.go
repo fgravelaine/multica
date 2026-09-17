@@ -162,6 +162,20 @@ func (q *Queries) CountIssuesByLevel(ctx context.Context, arg CountIssuesByLevel
 	return items, nil
 }
 
+const deleteLevelPolicy = `-- name: DeleteLevelPolicy :exec
+DELETE FROM level_policy WHERE workspace_id = $1 AND level = $2
+`
+
+type DeleteLevelPolicyParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Level       string      `json:"level"`
+}
+
+func (q *Queries) DeleteLevelPolicy(ctx context.Context, arg DeleteLevelPolicyParams) error {
+	_, err := q.db.Exec(ctx, deleteLevelPolicy, arg.WorkspaceID, arg.Level)
+	return err
+}
+
 const getMissionCampaign = `-- name: GetMissionCampaign :one
 
 SELECT p.id, p.title, p.icon, p.status
@@ -315,6 +329,54 @@ func (q *Queries) ListIssuesAtLevel(ctx context.Context, arg ListIssuesAtLevelPa
 			&i.CampaignTitle,
 			&i.ParentNumber,
 			&i.ParentTitle,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLevelPolicies = `-- name: ListLevelPolicies :many
+
+SELECT id, level, model, thinking_level, service_tier, updated_at
+FROM level_policy
+WHERE workspace_id = $1
+ORDER BY level
+`
+
+type ListLevelPoliciesRow struct {
+	ID            pgtype.UUID        `json:"id"`
+	Level         string             `json:"level"`
+	Model         pgtype.Text        `json:"model"`
+	ThinkingLevel pgtype.Text        `json:"thinking_level"`
+	ServiceTier   pgtype.Text        `json:"service_tier"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+// ── What a rung costs to run ────────────────────────────────────────────────
+// Every rung policy in the workspace. Read once per claim, and empty for a
+// workspace that has set none — which is the default and costs one small
+// indexed read.
+func (q *Queries) ListLevelPolicies(ctx context.Context, workspaceID pgtype.UUID) ([]ListLevelPoliciesRow, error) {
+	rows, err := q.db.Query(ctx, listLevelPolicies, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListLevelPoliciesRow{}
+	for rows.Next() {
+		var i ListLevelPoliciesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Level,
+			&i.Model,
+			&i.ThinkingLevel,
+			&i.ServiceTier,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -933,4 +995,48 @@ type RemoveIssueDependencyParams struct {
 func (q *Queries) RemoveIssueDependency(ctx context.Context, arg RemoveIssueDependencyParams) error {
 	_, err := q.db.Exec(ctx, removeIssueDependency, arg.IssueID, arg.DependsOnIssueID)
 	return err
+}
+
+const upsertLevelPolicy = `-- name: UpsertLevelPolicy :one
+INSERT INTO level_policy (workspace_id, level, model, thinking_level, service_tier)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (workspace_id, level) DO UPDATE
+SET model          = EXCLUDED.model,
+    thinking_level = EXCLUDED.thinking_level,
+    service_tier   = EXCLUDED.service_tier,
+    updated_at     = now()
+RETURNING id, workspace_id, level, model, thinking_level, service_tier, created_at, updated_at
+`
+
+type UpsertLevelPolicyParams struct {
+	WorkspaceID   pgtype.UUID `json:"workspace_id"`
+	Level         string      `json:"level"`
+	Model         pgtype.Text `json:"model"`
+	ThinkingLevel pgtype.Text `json:"thinking_level"`
+	ServiceTier   pgtype.Text `json:"service_tier"`
+}
+
+// Set what a rung runs on. Each field is independently clearable, which is why
+// this is a full replace rather than a COALESCE merge: a merge cannot express
+// "stop overriding the model but keep overriding thinking".
+func (q *Queries) UpsertLevelPolicy(ctx context.Context, arg UpsertLevelPolicyParams) (LevelPolicy, error) {
+	row := q.db.QueryRow(ctx, upsertLevelPolicy,
+		arg.WorkspaceID,
+		arg.Level,
+		arg.Model,
+		arg.ThinkingLevel,
+		arg.ServiceTier,
+	)
+	var i LevelPolicy
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Level,
+		&i.Model,
+		&i.ThinkingLevel,
+		&i.ServiceTier,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
