@@ -10,7 +10,12 @@ import (
 
 // Command group IDs used across the CLI.
 const (
-	groupCore       = "core"
+	groupCore = "core"
+	// SPIKE: the cycle verbs. A group of their own rather than a scatter under
+	// CORE, because what they have in common is not a noun — it is that every
+	// one of them exists to be COUNTED. A verb nobody can find is counted zero
+	// times, which is indistinguishable from a team that never needed it.
+	groupCycle      = "cycle"
 	groupRuntime    = "runtime"
 	groupAdditional = "additional"
 )
@@ -43,6 +48,7 @@ func initHelp(root *cobra.Command) {
 
 	root.AddGroup(
 		&cobra.Group{ID: groupCore, Title: "CORE COMMANDS"},
+		&cobra.Group{ID: groupCycle, Title: "CYCLE COMMANDS"},
 		&cobra.Group{ID: groupRuntime, Title: "RUNTIME COMMANDS"},
 		&cobra.Group{ID: groupAdditional, Title: "ADDITIONAL COMMANDS"},
 	)

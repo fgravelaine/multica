@@ -45,6 +45,14 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&debugFlag, "debug", false, "Print full error details on failure (env: MULTICA_DEBUG)")
 
 	// Core commands
+	handCmd.GroupID = groupCycle
+	referentialCmd.GroupID = groupCycle
+	restateCmd.GroupID = groupCycle
+	levelCmd.GroupID = groupCycle
+	waitsOnCmd.GroupID = groupCycle
+	levelGateCmd.GroupID = groupCycle
+	levelPolicyCmd.GroupID = groupCycle
+
 	issueCmd.GroupID = groupCore
 	projectCmd.GroupID = groupCore
 	labelCmd.GroupID = groupCore
@@ -90,6 +98,7 @@ func init() {
 	rootCmd.AddCommand(waitsOnCmd)
 	rootCmd.AddCommand(levelPolicyCmd)
 	rootCmd.AddCommand(levelGateCmd)
+	rootCmd.AddCommand(restateCmd)
 	rootCmd.AddCommand(chatCmd)
 	rootCmd.AddCommand(daemonCmd)
 	rootCmd.AddCommand(runtimeCmd)
