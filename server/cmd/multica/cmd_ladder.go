@@ -306,6 +306,9 @@ func runLevelGate(cmd *cobra.Command, args []string) error {
 			if id := strVal(g, "ratifier_id"); id != "" {
 				ratifier = ratifier + " " + id
 			}
+			if rv, _ := g["requires_verdicts"].(bool); rv {
+				ratifier = ratifier + " + verdicts"
+			}
 			if raw, ok := g["required_checks"].([]any); ok && len(raw) > 0 {
 				names := make([]string, 0, len(raw))
 				for _, n := range raw {
@@ -335,6 +338,7 @@ func runLevelGate(cmd *cobra.Command, args []string) error {
 	ratifier, _ := cmd.Flags().GetString("ratifier")
 	agentID, _ := cmd.Flags().GetString("agent")
 	checks, _ := cmd.Flags().GetStringArray("check")
+	verdicts, _ := cmd.Flags().GetBool("verdicts")
 
 	body := map[string]any{"position": position, "status_key": status}
 	if status != "" {
@@ -357,6 +361,9 @@ func runLevelGate(cmd *cobra.Command, args []string) error {
 		if len(checks) > 0 {
 			body["required_checks"] = checks
 		}
+		// Independent of the ratifier: "did the right party say yes" and "does
+		// the evidence exist" are different questions, and a real gate asks both.
+		body["requires_verdicts"] = verdicts
 	}
 
 	var resp map[string]any
@@ -389,6 +396,7 @@ func init() {
 
 	levelGateCmd.Flags().String("status", "", "Status a unit sits in while this gate holds it (empty clears the gate)")
 	levelGateCmd.Flags().String("ratifier", "", "Who accepts the return: human | agent | check (default human)")
+	levelGateCmd.Flags().Bool("verdicts", false, "Also require a passing verdict on every acceptance criterion")
 	levelGateCmd.Flags().StringArray("check", nil, "Check that must conclude success, exactly as GitHub names it. Repeatable; implies --ratifier check")
 	levelGateCmd.Flags().String("agent", "", "Agent id, required when --ratifier agent")
 	levelGateCmd.Flags().String("output", "table", "Output format: table or json")

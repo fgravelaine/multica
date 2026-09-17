@@ -48,6 +48,8 @@ func init() {
 	handCmd.GroupID = groupCycle
 	referentialCmd.GroupID = groupCycle
 	restateCmd.GroupID = groupCycle
+	criteriaCmd.GroupID = groupCycle
+	verdictCmd.GroupID = groupCycle
 	levelCmd.GroupID = groupCycle
 	waitsOnCmd.GroupID = groupCycle
 	levelGateCmd.GroupID = groupCycle
@@ -99,6 +101,8 @@ func init() {
 	rootCmd.AddCommand(levelPolicyCmd)
 	rootCmd.AddCommand(levelGateCmd)
 	rootCmd.AddCommand(restateCmd)
+	rootCmd.AddCommand(criteriaCmd)
+	rootCmd.AddCommand(verdictCmd)
 	rootCmd.AddCommand(chatCmd)
 	rootCmd.AddCommand(daemonCmd)
 	rootCmd.AddCommand(runtimeCmd)

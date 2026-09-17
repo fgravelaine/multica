@@ -993,6 +993,82 @@ full package run while my hand-made PR fixture was still sitting in the shared
 database. I had inserted it for the CLI walk-through and not removed it.
 Deleting it made the package green. My leftover row, not the gate.
 
+## 24. T4 exists
+
+§22 built what CLOSES the verify beat and not the beat itself. `qa` was a place
+a unit waited rather than work anyone did: the gate could answer *"AP-5 said
+yes"* and could not answer *"what did AP-5 check, and what did it find"*.
+
+**Nothing here is a new process.** Every rule below is already written in
+`agents/ap5.md`. What changed is that the product holds them instead of an agent
+remembering them.
+
+| AP-5's sentence | was | is now |
+|---|---|---|
+| "Each acceptance criterion gets its own line and its own verdict" | `- [ ]` in a description | `acceptance_criterion` rows |
+| "Evidence or it did not happen" | prose in a comment | `criterion_verdict.evidence`, NOT NULL |
+| "No criteria, no verdict ... you do not pass it" | AP-5 reads and decides | the gate refuses |
+| "`qa` is yours, and only yours" | convention | §22's ratifier |
+
+### It reads the template you already write
+
+`## Acceptance Criteria` with checkboxes is Galactics' own issue template, and
+the checkbox was always a per-criterion object in embryo — nothing read it.
+`multica criteria <issue> --from-description` does. It stops at the next
+heading, so `## Agent Notes` is not mistaken for criteria, and a ticked `- [x]`
+still counts: dropping it would make the imported list shorter than the one in
+front of the person importing it.
+
+### Two conditions, asked separately
+
+`requires_verdicts` is its own column rather than a fourth ratifier kind,
+because *"did the right party say yes"* and *"does the evidence exist"* are
+different questions and a real gate asks both. AP-5 ratifying `qa` with no
+verdicts behind it is the exact situation this table exists to end.
+
+### The traps
+
+**Vacuous truth, again.** "Every criterion passed" is TRUE over an empty list,
+so an issue nobody wrote criteria for would sail through. It is its own
+refusal — and it is also AP-5's own first finding, so the message says the issue
+goes back to whoever scoped it.
+
+**"Nobody looked" must never render as "it failed".** sqlc infers non-null from
+the LATERAL join and generates a plain `bool`, which both loses that distinction
+and fails the scan outright on an unruled criterion. A `CASE` degrades it to
+`interface{}`. The fix is to COALESCE and move the two-state answer onto
+`ruled_at`, which IS typed nullable — with a comment on both sides saying that
+`passed` means nothing without it.
+
+**Evidence is required on a PASS.** A pass nobody can reproduce is the aggregate
+"works fine" AP-5's file refuses by name, wearing a per-criterion costume.
+
+**Verdicts accumulate.** A re-check after a fix is a new row. Overwriting would
+make "criterion 2 failed twice before passing" unaskable — and that sequence is
+the input to raised-hand.md's staffing question, *do the past answers predict
+the next ones*.
+
+**Rewriting the criteria drops their verdicts.** A verdict is evidence about one
+exact statement; carrying it onto a rewritten one produces exactly the
+unreproducible pass AP-5 calls an incomplete verdict.
+
+### Measured, on a Veezeet objective with the real template
+
+```
+criteria --from-description     3 criteria, stops at ## Agent Notes
+qa -> in_review                 REFUSED  "criterion 1, 2, 3 has no verdict yet"
+verdict 1 pass (no --evidence)  REFUSED  at the CLI
+1 pass, 2 FAIL, 3 pass          recorded
+qa -> in_review                 REFUSED  "criterion 2 failed"
+2 pass after the fix            recorded — two rows on criterion 2, not one
+qa -> in_review                 REFUSED  "ratified by one named agent"  <- the
+                                         verdicts passed; the ratifier is next
+an issue with no criteria       REFUSED  "no acceptance criteria"
+```
+
+The last-but-one line is the point: both conditions hold independently, and the
+gate says which one is in the way.
+
 ## What was NOT done
 
 - **No parallel ratification.** Gates queue; they cannot both hold a unit. Two
@@ -1010,11 +1086,10 @@ Deleting it made the package green. My leftover row, not the gate.
 - **Nothing reads the referential back.** A rule lands in `referential_entry` and
   is counted; no agent is handed it when it starts work. The loop is closed for
   measurement, not for use. That is the honest limit of §21.
-- **No verify step.** The gate exists; T4 does not. AP-5's criteria are markdown
-  checkboxes in a description and its verdicts are prose in a comment, so the
-  gate has nothing to read and asks a person instead. Two tables
-  (`acceptance_criterion`, `verdict`) and the four rules AP-5 already states
-  become mechanical. §23.
+- **Nothing reads a criterion back to the agent that must satisfy it.** The
+  criteria are objects now (§24) and the gate reads the verdicts, but an agent
+  starting work is still handed a description, not a list. Same shape as the
+  referential gap above: closed for measurement, open for use.
 - **Referentials are read-only.** Six built-ins, seeded lazily, no create
   endpoint. Veezeet's own references — its domain model, its API contract —
   cannot be added. `brand_register` and `product_direction` happen to be there.
@@ -1066,6 +1141,7 @@ Deleting it made the package green. My leftover row, not the gate.
 - [x] the cycle verbs made findable, and `restate` under its own name
 - [x] the Galactic team seeded into a workspace, Veezeet beside it
 - [x] scripted gates — 13 of gate-pr's 13 checks now expressible
+- [x] the verify beat — criteria and verdicts as objects, read by the gate
 
 Whether any of this is worth proposing upstream is a decision for later and was
 not part of this session.

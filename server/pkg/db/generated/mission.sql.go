@@ -231,7 +231,7 @@ func (q *Queries) GetMissionCampaign(ctx context.Context, issueID pgtype.UUID) (
 }
 
 const listAllLevelGates = `-- name: ListAllLevelGates :many
-SELECT id, workspace_id, level, position, status_key, ratifier_type, ratifier_id, created_at, required_checks FROM level_gate
+SELECT id, workspace_id, level, position, status_key, ratifier_type, ratifier_id, created_at, required_checks, requires_verdicts FROM level_gate
 WHERE workspace_id = $1
 ORDER BY level, position
 `
@@ -255,6 +255,7 @@ func (q *Queries) ListAllLevelGates(ctx context.Context, workspaceID pgtype.UUID
 			&i.RatifierID,
 			&i.CreatedAt,
 			&i.RequiredChecks,
+			&i.RequiresVerdicts,
 		); err != nil {
 			return nil, err
 		}
@@ -456,7 +457,7 @@ func (q *Queries) ListIssuesAtLevel(ctx context.Context, arg ListIssuesAtLevelPa
 }
 
 const listLevelGates = `-- name: ListLevelGates :many
-SELECT id, workspace_id, level, position, status_key, ratifier_type, ratifier_id, created_at, required_checks FROM level_gate
+SELECT id, workspace_id, level, position, status_key, ratifier_type, ratifier_id, created_at, required_checks, requires_verdicts FROM level_gate
 WHERE workspace_id = $1 AND level = $2
 ORDER BY position
 `
@@ -486,6 +487,7 @@ func (q *Queries) ListLevelGates(ctx context.Context, arg ListLevelGatesParams) 
 			&i.RatifierID,
 			&i.CreatedAt,
 			&i.RequiredChecks,
+			&i.RequiresVerdicts,
 		); err != nil {
 			return nil, err
 		}
@@ -1155,24 +1157,26 @@ func (q *Queries) RemoveIssueDependency(ctx context.Context, arg RemoveIssueDepe
 }
 
 const setLevelGate = `-- name: SetLevelGate :one
-INSERT INTO level_gate (workspace_id, level, position, status_key, ratifier_type, ratifier_id, required_checks)
-VALUES ($1, $2, $3, $4, $5, $6, $7::text[])
+INSERT INTO level_gate (workspace_id, level, position, status_key, ratifier_type, ratifier_id, required_checks, requires_verdicts)
+VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8)
 ON CONFLICT (workspace_id, level, position) DO UPDATE
-SET status_key      = EXCLUDED.status_key,
-    ratifier_type   = EXCLUDED.ratifier_type,
-    ratifier_id     = EXCLUDED.ratifier_id,
-    required_checks = EXCLUDED.required_checks
-RETURNING id, workspace_id, level, position, status_key, ratifier_type, ratifier_id, created_at, required_checks
+SET status_key        = EXCLUDED.status_key,
+    ratifier_type     = EXCLUDED.ratifier_type,
+    ratifier_id       = EXCLUDED.ratifier_id,
+    required_checks   = EXCLUDED.required_checks,
+    requires_verdicts = EXCLUDED.requires_verdicts
+RETURNING id, workspace_id, level, position, status_key, ratifier_type, ratifier_id, created_at, required_checks, requires_verdicts
 `
 
 type SetLevelGateParams struct {
-	WorkspaceID    pgtype.UUID `json:"workspace_id"`
-	Level          string      `json:"level"`
-	Position       int32       `json:"position"`
-	StatusKey      string      `json:"status_key"`
-	RatifierType   string      `json:"ratifier_type"`
-	RatifierID     pgtype.UUID `json:"ratifier_id"`
-	RequiredChecks []string    `json:"required_checks"`
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	Level            string      `json:"level"`
+	Position         int32       `json:"position"`
+	StatusKey        string      `json:"status_key"`
+	RatifierType     string      `json:"ratifier_type"`
+	RatifierID       pgtype.UUID `json:"ratifier_id"`
+	RequiredChecks   []string    `json:"required_checks"`
+	RequiresVerdicts bool        `json:"requires_verdicts"`
 }
 
 func (q *Queries) SetLevelGate(ctx context.Context, arg SetLevelGateParams) (LevelGate, error) {
@@ -1184,6 +1188,7 @@ func (q *Queries) SetLevelGate(ctx context.Context, arg SetLevelGateParams) (Lev
 		arg.RatifierType,
 		arg.RatifierID,
 		arg.RequiredChecks,
+		arg.RequiresVerdicts,
 	)
 	var i LevelGate
 	err := row.Scan(
@@ -1196,6 +1201,7 @@ func (q *Queries) SetLevelGate(ctx context.Context, arg SetLevelGateParams) (Lev
 		&i.RatifierID,
 		&i.CreatedAt,
 		&i.RequiredChecks,
+		&i.RequiresVerdicts,
 	)
 	return i, err
 }

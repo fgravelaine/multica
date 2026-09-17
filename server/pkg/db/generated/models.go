@@ -10,6 +10,15 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AcceptanceCriterion struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	IssueID     pgtype.UUID        `json:"issue_id"`
+	Ordinal     int32              `json:"ordinal"`
+	Statement   string             `json:"statement"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
 type ActivityLog struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`
@@ -593,6 +602,17 @@ type ContactSalesInquiry struct {
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 }
 
+type CriterionVerdict struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	CriterionID pgtype.UUID        `json:"criterion_id"`
+	Passed      bool               `json:"passed"`
+	Evidence    string             `json:"evidence"`
+	AuthorType  string             `json:"author_type"`
+	AuthorID    pgtype.UUID        `json:"author_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
 type DaemonConnection struct {
 	ID              pgtype.UUID        `json:"id"`
 	AgentID         pgtype.UUID        `json:"agent_id"`
@@ -1024,15 +1044,16 @@ type LarkUserBinding struct {
 }
 
 type LevelGate struct {
-	ID             pgtype.UUID        `json:"id"`
-	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
-	Level          string             `json:"level"`
-	Position       int32              `json:"position"`
-	StatusKey      string             `json:"status_key"`
-	RatifierType   string             `json:"ratifier_type"`
-	RatifierID     pgtype.UUID        `json:"ratifier_id"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	RequiredChecks []string           `json:"required_checks"`
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	Level            string             `json:"level"`
+	Position         int32              `json:"position"`
+	StatusKey        string             `json:"status_key"`
+	RatifierType     string             `json:"ratifier_type"`
+	RatifierID       pgtype.UUID        `json:"ratifier_id"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	RequiredChecks   []string           `json:"required_checks"`
+	RequiresVerdicts bool               `json:"requires_verdicts"`
 }
 
 type LevelPolicy struct {

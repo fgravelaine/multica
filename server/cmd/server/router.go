@@ -2023,6 +2023,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Put("/api/level-policies/{level}", h.SetLevelPolicy)
 			r.Get("/api/level-gates", h.ListLevelGates)
 			r.Put("/api/level-gates/{level}", h.SetLevelGate)
+			r.Get("/api/issues/{id}/criteria", h.ListIssueCriteria)
+			r.Put("/api/issues/{id}/criteria", h.SetIssueCriteria)
+			r.Post("/api/issues/{id}/verdict", h.RecordVerdict)
 
 			// Projects
 			r.Route("/api/projects", func(r chi.Router) {

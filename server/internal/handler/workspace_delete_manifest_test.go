@@ -126,9 +126,16 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	// migration 488): an FK would cascade a gate away when a status is
 	// archived, and a rung that silently stops refusing things is the
 	// dangerous direction.
-	"level_gate":   workspaceDelete,
-	"level_policy": workspaceDelete,
-	"referential":  workspaceDelete,
+	// SPIKE: acceptance_criterion and criterion_verdict. T4's output — a
+	// verdict per criterion, with its evidence. Both go with the workspace on
+	// the workspace FK's CASCADE, and the verdict ALSO cascades from its
+	// criterion: a verdict is evidence about one exact statement, so it must
+	// not outlive the statement it was about.
+	"acceptance_criterion": workspaceDelete,
+	"criterion_verdict":    workspaceDelete,
+	"level_gate":           workspaceDelete,
+	"level_policy":         workspaceDelete,
+	"referential":          workspaceDelete,
 	// SPIKE: referential_entry. What an answered hand wrote UP into the
 	// referential when its scope was `rule`. Goes with the workspace on the
 	// workspace FK's CASCADE. source_hand_id is ON DELETE SET NULL rather than

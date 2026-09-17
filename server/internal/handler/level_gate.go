@@ -179,10 +179,69 @@ func (h *Handler) checkLevelGate(ctx context.Context, issue db.Issue, targetStat
 	if !ok {
 		return ""
 	}
+	// Verdicts first, when the gate wants them. "Is the evidence there" is a
+	// more useful refusal than "you are not the ratifier" — and a ratifier who
+	// IS allowed to release the gate still must not release it over criteria
+	// nobody ruled on. That is the whole point of asking both.
+	if gate.RequiresVerdicts {
+		if refusal := h.verdictRefusal(ctx, issue, gate); refusal != "" {
+			return refusal
+		}
+	}
 	if gate.RatifierType == ratifierCheck {
 		return h.scriptedRefusal(ctx, issue, gate)
 	}
 	return ratifierRefusal(gate, actorType, actorID)
+}
+
+// verdictRefusal is T4 read back: a verdict per criterion, with its evidence.
+//
+// It enforces three sentences that are already in agents/ap5.md and were, until
+// now, things an agent had to remember:
+//
+//	"Each acceptance criterion gets its own line and its own verdict."
+//	"No criteria, no verdict ... you do not invent them and you do not pass it."
+//	"Evidence or it did not happen."  (the NOT NULL on criterion_verdict.evidence)
+//
+// The no-criteria case is NOT a pass. An issue with no acceptance criteria is
+// AP-5's own first finding, and "every criterion passed" is true over an empty
+// set — the same vacuous truth the scripted gate refuses.
+func (h *Handler) verdictRefusal(ctx context.Context, issue db.Issue, gate db.LevelGate) string {
+	rows, err := h.Queries.ListLatestVerdictsForIssue(ctx, issue.ID)
+	if err != nil {
+		// Fail closed, like the scripted gate and unlike the rest of this file.
+		// A gate that reads evidence is worth having only if an unreadable
+		// table cannot be mistaken for evidence.
+		return gate.StatusKey + " could not be verified: the verdicts could not be read"
+	}
+	if len(rows) == 0 {
+		return gate.StatusKey + " has no acceptance criteria: there is nothing to verify, " +
+			"and an issue with none goes back to whoever scoped it"
+	}
+
+	var unruled, failed []string
+	for _, row := range rows {
+		switch {
+		// RuledAt is the two-state answer; Passed is coalesced and means
+		// nothing on its own. See the query — reading Passed without this check
+		// would turn "nobody looked" into "it failed".
+		case !row.RuledAt.Valid:
+			unruled = append(unruled, fmt.Sprintf("%d", row.Ordinal))
+		case !row.Passed:
+			failed = append(failed, fmt.Sprintf("%d", row.Ordinal))
+		}
+	}
+	// Failures first: a criterion that was checked and failed is a different
+	// message from one nobody has looked at, and the first is actionable now.
+	if len(failed) > 0 {
+		return fmt.Sprintf("%s: criterion %s failed",
+			gate.StatusKey, strings.Join(failed, ", "))
+	}
+	if len(unruled) > 0 {
+		return fmt.Sprintf("%s: criterion %s has no verdict yet",
+			gate.StatusKey, strings.Join(unruled, ", "))
+	}
+	return ""
 }
 
 // scriptedRefusal is the gate that asks nobody.
@@ -316,12 +375,13 @@ func writeLevelGateRefusal(w http.ResponseWriter, refusal string) {
 
 // LevelGateEntry is one gate on one rung, as the API renders it.
 type LevelGateEntry struct {
-	Level          string   `json:"level"`
-	Position       int32    `json:"position"`
-	StatusKey      string   `json:"status_key"`
-	RatifierType   string   `json:"ratifier_type"`
-	RatifierID     *string  `json:"ratifier_id,omitempty"`
-	RequiredChecks []string `json:"required_checks,omitempty"`
+	Level            string   `json:"level"`
+	Position         int32    `json:"position"`
+	StatusKey        string   `json:"status_key"`
+	RatifierType     string   `json:"ratifier_type"`
+	RatifierID       *string  `json:"ratifier_id,omitempty"`
+	RequiredChecks   []string `json:"required_checks,omitempty"`
+	RequiresVerdicts bool     `json:"requires_verdicts"`
 }
 
 func levelGateToEntry(gate db.LevelGate) LevelGateEntry {
@@ -336,6 +396,7 @@ func levelGateToEntry(gate db.LevelGate) LevelGateEntry {
 		entry.RatifierID = &id
 	}
 	entry.RequiredChecks = gate.RequiredChecks
+	entry.RequiresVerdicts = gate.RequiresVerdicts
 	return entry
 }
 
@@ -373,11 +434,12 @@ func (h *Handler) SetLevelGate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Position       int32    `json:"position"`
-		StatusKey      string   `json:"status_key"`
-		RatifierType   string   `json:"ratifier_type"`
-		RatifierID     string   `json:"ratifier_id"`
-		RequiredChecks []string `json:"required_checks"`
+		Position         int32    `json:"position"`
+		StatusKey        string   `json:"status_key"`
+		RatifierType     string   `json:"ratifier_type"`
+		RatifierID       string   `json:"ratifier_id"`
+		RequiredChecks   []string `json:"required_checks"`
+		RequiresVerdicts bool     `json:"requires_verdicts"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -459,13 +521,14 @@ func (h *Handler) SetLevelGate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	gate, err := h.Queries.SetLevelGate(r.Context(), db.SetLevelGateParams{
-		WorkspaceID:    wsUUID,
-		Level:          level,
-		Position:       req.Position,
-		StatusKey:      statusKey,
-		RatifierType:   ratifierType,
-		RatifierID:     ratifierID,
-		RequiredChecks: requiredChecks,
+		WorkspaceID:      wsUUID,
+		Level:            level,
+		Position:         req.Position,
+		StatusKey:        statusKey,
+		RatifierType:     ratifierType,
+		RatifierID:       ratifierID,
+		RequiredChecks:   requiredChecks,
+		RequiresVerdicts: req.RequiresVerdicts,
 	})
 	if err != nil {
 		// The unique index on (workspace, level, status_key) is the likely

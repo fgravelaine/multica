@@ -461,13 +461,14 @@ WHERE workspace_id = @workspace_id
 ORDER BY level, position;
 
 -- name: SetLevelGate :one
-INSERT INTO level_gate (workspace_id, level, position, status_key, ratifier_type, ratifier_id, required_checks)
-VALUES (@workspace_id, @level, @position, @status_key, @ratifier_type, sqlc.narg('ratifier_id'), sqlc.narg('required_checks')::text[])
+INSERT INTO level_gate (workspace_id, level, position, status_key, ratifier_type, ratifier_id, required_checks, requires_verdicts)
+VALUES (@workspace_id, @level, @position, @status_key, @ratifier_type, sqlc.narg('ratifier_id'), sqlc.narg('required_checks')::text[], @requires_verdicts)
 ON CONFLICT (workspace_id, level, position) DO UPDATE
-SET status_key      = EXCLUDED.status_key,
-    ratifier_type   = EXCLUDED.ratifier_type,
-    ratifier_id     = EXCLUDED.ratifier_id,
-    required_checks = EXCLUDED.required_checks
+SET status_key        = EXCLUDED.status_key,
+    ratifier_type     = EXCLUDED.ratifier_type,
+    ratifier_id       = EXCLUDED.ratifier_id,
+    required_checks   = EXCLUDED.required_checks,
+    requires_verdicts = EXCLUDED.requires_verdicts
 RETURNING *;
 
 -- SPIKE: every check run on every change proposal attached to this issue,
