@@ -27,6 +27,10 @@ import (
 const (
 	ratifierHuman = "human"
 	ratifierAgent = "agent"
+	// ratifierCheck is the majority case in Galactics' own PR gate — 9 of its
+	// 13 checks are scripts and 2 more are CI. Nobody is asked; a script already
+	// answered, and this reads the answer.
+	ratifierCheck = "check"
 
 	// actorMember is what resolveActor calls a person. Named here so the
 	// mismatch with ratifierHuman is visible at the point it matters.
@@ -175,7 +179,90 @@ func (h *Handler) checkLevelGate(ctx context.Context, issue db.Issue, targetStat
 	if !ok {
 		return ""
 	}
+	if gate.RatifierType == ratifierCheck {
+		return h.scriptedRefusal(ctx, issue, gate)
+	}
 	return ratifierRefusal(gate, actorType, actorID)
+}
+
+// scriptedRefusal is the gate that asks nobody.
+//
+// It reads what GitHub already told Multica: `check_run`, `check_suite` and
+// `status` webhooks land in github_pull_request_check_run, one row per check,
+// with its name, status and conclusion. Every check in Galactics' PR gate
+// already arrives here. Until now nothing was allowed to refuse on it.
+//
+// Three refusals, and they are deliberately distinct because they need
+// different actions from whoever reads them:
+//
+//   - no change proposal attached — there is nothing to check. A scripted gate
+//     with no PR must not pass by vacuous truth, which is what "every required
+//     check succeeded" evaluates to over an empty set.
+//   - a required check has not reported on this head — pending, or the name is
+//     wrong. Both are "wait or fix the name", not "your code is bad".
+//   - a required check failed — the only one that means what it says.
+func (h *Handler) scriptedRefusal(ctx context.Context, issue db.Issue, gate db.LevelGate) string {
+	required := gate.RequiredChecks
+	if len(required) == 0 {
+		// The CHECK constraint makes this unreachable. If it is ever reached, a
+		// migration got ahead of this file, and a gate that verifies nothing
+		// must not silently open.
+		return gate.StatusKey + " is gated on checks, but names none"
+	}
+
+	rows, err := h.Queries.ListIssueCheckRuns(ctx, issue.ID)
+	if err != nil {
+		// FAIL CLOSED. Everywhere else in this file a lookup failure widens what
+		// is allowed, because refusing on a failed COUNT would look like a
+		// rejected review. Here the opposite: the whole value of a scripted gate
+		// is that it cannot be talked past, and "the database was briefly
+		// unavailable" is not evidence that nine scripts passed.
+		return gate.StatusKey + " could not be verified: the check results could not be read"
+	}
+	if len(rows) == 0 {
+		return gate.StatusKey + " is gated on " + strings.Join(required, ", ") +
+			", and no change proposal is attached to this issue"
+	}
+
+	// Per PR, because every attached proposal has to pass. A green PR next to a
+	// red one is not a passing gate.
+	type verdict struct{ status, conclusion string }
+	byPR := map[string]map[string]verdict{}
+	prNumber := map[string]int32{}
+	for _, row := range rows {
+		key := uuidToString(row.PrID)
+		prNumber[key] = row.PrNumber
+		if _, ok := byPR[key]; !ok {
+			byPR[key] = map[string]verdict{}
+		}
+		if !row.CheckName.Valid {
+			// The LEFT JOIN's empty side: a PR at a head with no checks yet.
+			continue
+		}
+		byPR[key][row.CheckName.String] = verdict{
+			status:     row.CheckStatus.String,
+			conclusion: row.CheckConclusion.String,
+		}
+	}
+
+	for prID, checks := range byPR {
+		for _, name := range required {
+			got, reported := checks[name]
+			if !reported {
+				return fmt.Sprintf("%s is gated on %q, which has not reported on PR #%d's current head",
+					gate.StatusKey, name, prNumber[prID])
+			}
+			if got.status != "completed" {
+				return fmt.Sprintf("%s is gated on %q, which is still running on PR #%d",
+					gate.StatusKey, name, prNumber[prID])
+			}
+			if got.conclusion != "success" {
+				return fmt.Sprintf("%s is gated on %q, which concluded %q on PR #%d",
+					gate.StatusKey, name, got.conclusion, prNumber[prID])
+			}
+		}
+	}
+	return ""
 }
 
 // ratifierRefusal is the "who accepts the return" half, split out so the rule is
@@ -200,6 +287,11 @@ func ratifierRefusal(gate db.LevelGate, actorType, actorID string) string {
 		return fmt.Sprintf(
 			"%s is ratified by a human: an agent cannot move a unit out of it",
 			gate.StatusKey)
+	case ratifierCheck:
+		// Handled by scriptedRefusal, which needs the database. Reaching here
+		// means a caller bypassed checkLevelGate; refusing everyone is the safe
+		// direction for the one ratifier kind that cannot be argued with.
+		return gate.StatusKey + " is gated on checks, and they were not read"
 	case ratifierAgent:
 		if actorType == ratifierAgent && gate.RatifierID.Valid &&
 			strings.EqualFold(actorID, uuidToString(gate.RatifierID)) {
@@ -224,11 +316,12 @@ func writeLevelGateRefusal(w http.ResponseWriter, refusal string) {
 
 // LevelGateEntry is one gate on one rung, as the API renders it.
 type LevelGateEntry struct {
-	Level        string  `json:"level"`
-	Position     int32   `json:"position"`
-	StatusKey    string  `json:"status_key"`
-	RatifierType string  `json:"ratifier_type"`
-	RatifierID   *string `json:"ratifier_id,omitempty"`
+	Level          string   `json:"level"`
+	Position       int32    `json:"position"`
+	StatusKey      string   `json:"status_key"`
+	RatifierType   string   `json:"ratifier_type"`
+	RatifierID     *string  `json:"ratifier_id,omitempty"`
+	RequiredChecks []string `json:"required_checks,omitempty"`
 }
 
 func levelGateToEntry(gate db.LevelGate) LevelGateEntry {
@@ -242,6 +335,7 @@ func levelGateToEntry(gate db.LevelGate) LevelGateEntry {
 		id := uuidToString(gate.RatifierID)
 		entry.RatifierID = &id
 	}
+	entry.RequiredChecks = gate.RequiredChecks
 	return entry
 }
 
@@ -279,10 +373,11 @@ func (h *Handler) SetLevelGate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Position     int32  `json:"position"`
-		StatusKey    string `json:"status_key"`
-		RatifierType string `json:"ratifier_type"`
-		RatifierID   string `json:"ratifier_id"`
+		Position       int32    `json:"position"`
+		StatusKey      string   `json:"status_key"`
+		RatifierType   string   `json:"ratifier_type"`
+		RatifierID     string   `json:"ratifier_id"`
+		RequiredChecks []string `json:"required_checks"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -319,11 +414,29 @@ func (h *Handler) SetLevelGate(w http.ResponseWriter, r *http.Request) {
 	if ratifierType == "" {
 		ratifierType = ratifierHuman
 	}
-	if ratifierType != ratifierHuman && ratifierType != ratifierAgent {
+	if ratifierType != ratifierHuman && ratifierType != ratifierAgent && ratifierType != ratifierCheck {
 		writeError(w, http.StatusBadRequest,
-			"ratifier_type is "+ratifierHuman+" or "+ratifierAgent+
+			"ratifier_type is one of "+ratifierHuman+", "+ratifierAgent+", "+ratifierCheck+
 				" — `lead` is deliberately absent until somebody says what it means for a gate")
 		return
+	}
+
+	var requiredChecks []string
+	if ratifierType == ratifierCheck {
+		for _, name := range req.RequiredChecks {
+			if trimmed := strings.TrimSpace(name); trimmed != "" {
+				requiredChecks = append(requiredChecks, trimmed)
+			}
+		}
+		if len(requiredChecks) == 0 {
+			// A check gate naming nothing verifies nothing and opens for
+			// anyone, while reading as configured. That is the worst failure
+			// available here, so it is refused at declaration rather than
+			// discovered at the gate.
+			writeError(w, http.StatusBadRequest,
+				"a check ratifier needs required_checks: a gate that names no check verifies nothing")
+			return
+		}
 	}
 
 	var ratifierID pgtype.UUID
@@ -346,12 +459,13 @@ func (h *Handler) SetLevelGate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	gate, err := h.Queries.SetLevelGate(r.Context(), db.SetLevelGateParams{
-		WorkspaceID:  wsUUID,
-		Level:        level,
-		Position:     req.Position,
-		StatusKey:    statusKey,
-		RatifierType: ratifierType,
-		RatifierID:   ratifierID,
+		WorkspaceID:    wsUUID,
+		Level:          level,
+		Position:       req.Position,
+		StatusKey:      statusKey,
+		RatifierType:   ratifierType,
+		RatifierID:     ratifierID,
+		RequiredChecks: requiredChecks,
 	})
 	if err != nil {
 		// The unique index on (workspace, level, status_key) is the likely

@@ -461,13 +461,40 @@ WHERE workspace_id = @workspace_id
 ORDER BY level, position;
 
 -- name: SetLevelGate :one
-INSERT INTO level_gate (workspace_id, level, position, status_key, ratifier_type, ratifier_id)
-VALUES (@workspace_id, @level, @position, @status_key, @ratifier_type, sqlc.narg('ratifier_id'))
+INSERT INTO level_gate (workspace_id, level, position, status_key, ratifier_type, ratifier_id, required_checks)
+VALUES (@workspace_id, @level, @position, @status_key, @ratifier_type, sqlc.narg('ratifier_id'), sqlc.narg('required_checks')::text[])
 ON CONFLICT (workspace_id, level, position) DO UPDATE
-SET status_key    = EXCLUDED.status_key,
-    ratifier_type = EXCLUDED.ratifier_type,
-    ratifier_id   = EXCLUDED.ratifier_id
+SET status_key      = EXCLUDED.status_key,
+    ratifier_type   = EXCLUDED.ratifier_type,
+    ratifier_id     = EXCLUDED.ratifier_id,
+    required_checks = EXCLUDED.required_checks
 RETURNING *;
+
+-- SPIKE: every check run on every change proposal attached to this issue,
+-- restricted to each PR's CURRENT head.
+--
+-- The head_sha join is the load-bearing part. Check runs accumulate per commit,
+-- so without it a green run from three commits ago would release a gate on a
+-- head that has not been checked at all — the exact failure a scripted gate
+-- exists to prevent, and silent.
+--
+-- LEFT JOIN so a linked PR with no checks yet still returns a row. "A PR exists
+-- and reports nothing" and "no PR is attached" are different refusals, and the
+-- caller cannot tell them apart from an empty result.
+-- name: ListIssueCheckRuns :many
+SELECT
+    pr.id            AS pr_id,
+    pr.pr_number     AS pr_number,
+    pr.head_sha      AS head_sha,
+    cr.name          AS check_name,
+    cr.status        AS check_status,
+    cr.conclusion    AS check_conclusion
+FROM issue_pull_request ipr
+JOIN github_pull_request pr ON pr.id = ipr.pull_request_id
+LEFT JOIN github_pull_request_check_run cr
+       ON cr.pr_id = pr.id AND cr.head_sha = pr.head_sha
+WHERE ipr.issue_id = @issue_id
+ORDER BY pr.pr_number, cr.ordinal;
 
 -- name: DeleteLevelGate :exec
 DELETE FROM level_gate

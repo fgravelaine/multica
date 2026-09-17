@@ -231,7 +231,7 @@ func (q *Queries) GetMissionCampaign(ctx context.Context, issueID pgtype.UUID) (
 }
 
 const listAllLevelGates = `-- name: ListAllLevelGates :many
-SELECT id, workspace_id, level, position, status_key, ratifier_type, ratifier_id, created_at FROM level_gate
+SELECT id, workspace_id, level, position, status_key, ratifier_type, ratifier_id, created_at, required_checks FROM level_gate
 WHERE workspace_id = $1
 ORDER BY level, position
 `
@@ -254,6 +254,70 @@ func (q *Queries) ListAllLevelGates(ctx context.Context, workspaceID pgtype.UUID
 			&i.RatifierType,
 			&i.RatifierID,
 			&i.CreatedAt,
+			&i.RequiredChecks,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIssueCheckRuns = `-- name: ListIssueCheckRuns :many
+SELECT
+    pr.id            AS pr_id,
+    pr.pr_number     AS pr_number,
+    pr.head_sha      AS head_sha,
+    cr.name          AS check_name,
+    cr.status        AS check_status,
+    cr.conclusion    AS check_conclusion
+FROM issue_pull_request ipr
+JOIN github_pull_request pr ON pr.id = ipr.pull_request_id
+LEFT JOIN github_pull_request_check_run cr
+       ON cr.pr_id = pr.id AND cr.head_sha = pr.head_sha
+WHERE ipr.issue_id = $1
+ORDER BY pr.pr_number, cr.ordinal
+`
+
+type ListIssueCheckRunsRow struct {
+	PrID            pgtype.UUID `json:"pr_id"`
+	PrNumber        int32       `json:"pr_number"`
+	HeadSha         string      `json:"head_sha"`
+	CheckName       pgtype.Text `json:"check_name"`
+	CheckStatus     pgtype.Text `json:"check_status"`
+	CheckConclusion pgtype.Text `json:"check_conclusion"`
+}
+
+// SPIKE: every check run on every change proposal attached to this issue,
+// restricted to each PR's CURRENT head.
+//
+// The head_sha join is the load-bearing part. Check runs accumulate per commit,
+// so without it a green run from three commits ago would release a gate on a
+// head that has not been checked at all — the exact failure a scripted gate
+// exists to prevent, and silent.
+//
+// LEFT JOIN so a linked PR with no checks yet still returns a row. "A PR exists
+// and reports nothing" and "no PR is attached" are different refusals, and the
+// caller cannot tell them apart from an empty result.
+func (q *Queries) ListIssueCheckRuns(ctx context.Context, issueID pgtype.UUID) ([]ListIssueCheckRunsRow, error) {
+	rows, err := q.db.Query(ctx, listIssueCheckRuns, issueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListIssueCheckRunsRow{}
+	for rows.Next() {
+		var i ListIssueCheckRunsRow
+		if err := rows.Scan(
+			&i.PrID,
+			&i.PrNumber,
+			&i.HeadSha,
+			&i.CheckName,
+			&i.CheckStatus,
+			&i.CheckConclusion,
 		); err != nil {
 			return nil, err
 		}
@@ -392,7 +456,7 @@ func (q *Queries) ListIssuesAtLevel(ctx context.Context, arg ListIssuesAtLevelPa
 }
 
 const listLevelGates = `-- name: ListLevelGates :many
-SELECT id, workspace_id, level, position, status_key, ratifier_type, ratifier_id, created_at FROM level_gate
+SELECT id, workspace_id, level, position, status_key, ratifier_type, ratifier_id, created_at, required_checks FROM level_gate
 WHERE workspace_id = $1 AND level = $2
 ORDER BY position
 `
@@ -421,6 +485,7 @@ func (q *Queries) ListLevelGates(ctx context.Context, arg ListLevelGatesParams) 
 			&i.RatifierType,
 			&i.RatifierID,
 			&i.CreatedAt,
+			&i.RequiredChecks,
 		); err != nil {
 			return nil, err
 		}
@@ -1090,22 +1155,24 @@ func (q *Queries) RemoveIssueDependency(ctx context.Context, arg RemoveIssueDepe
 }
 
 const setLevelGate = `-- name: SetLevelGate :one
-INSERT INTO level_gate (workspace_id, level, position, status_key, ratifier_type, ratifier_id)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO level_gate (workspace_id, level, position, status_key, ratifier_type, ratifier_id, required_checks)
+VALUES ($1, $2, $3, $4, $5, $6, $7::text[])
 ON CONFLICT (workspace_id, level, position) DO UPDATE
-SET status_key    = EXCLUDED.status_key,
-    ratifier_type = EXCLUDED.ratifier_type,
-    ratifier_id   = EXCLUDED.ratifier_id
-RETURNING id, workspace_id, level, position, status_key, ratifier_type, ratifier_id, created_at
+SET status_key      = EXCLUDED.status_key,
+    ratifier_type   = EXCLUDED.ratifier_type,
+    ratifier_id     = EXCLUDED.ratifier_id,
+    required_checks = EXCLUDED.required_checks
+RETURNING id, workspace_id, level, position, status_key, ratifier_type, ratifier_id, created_at, required_checks
 `
 
 type SetLevelGateParams struct {
-	WorkspaceID  pgtype.UUID `json:"workspace_id"`
-	Level        string      `json:"level"`
-	Position     int32       `json:"position"`
-	StatusKey    string      `json:"status_key"`
-	RatifierType string      `json:"ratifier_type"`
-	RatifierID   pgtype.UUID `json:"ratifier_id"`
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	Level          string      `json:"level"`
+	Position       int32       `json:"position"`
+	StatusKey      string      `json:"status_key"`
+	RatifierType   string      `json:"ratifier_type"`
+	RatifierID     pgtype.UUID `json:"ratifier_id"`
+	RequiredChecks []string    `json:"required_checks"`
 }
 
 func (q *Queries) SetLevelGate(ctx context.Context, arg SetLevelGateParams) (LevelGate, error) {
@@ -1116,6 +1183,7 @@ func (q *Queries) SetLevelGate(ctx context.Context, arg SetLevelGateParams) (Lev
 		arg.StatusKey,
 		arg.RatifierType,
 		arg.RatifierID,
+		arg.RequiredChecks,
 	)
 	var i LevelGate
 	err := row.Scan(
@@ -1127,6 +1195,7 @@ func (q *Queries) SetLevelGate(ctx context.Context, arg SetLevelGateParams) (Lev
 		&i.RatifierType,
 		&i.RatifierID,
 		&i.CreatedAt,
+		&i.RequiredChecks,
 	)
 	return i, err
 }

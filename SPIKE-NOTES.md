@@ -922,6 +922,77 @@ and is silently inert on the unit in front of you.
 written and skips: the test workspace has one agent. The member-vs-agent and
 agent-vs-human-gate cases both ran.
 
+## 23. The scripted gate, and a wall that was not one
+
+I wrote in §22's proposal that a scripted gate *"needs a runner. Does not
+exist"*, and filed it beside the protocol-change wall. **That was wrong, and it
+was the cheapest thing in the spike.**
+
+Multica needs no runner. GitHub is the runner, and Multica already ingests the
+results: it handles `check_run`, `check_suite` and `status` webhooks and writes
+one row per check into `github_pull_request_check_run` with its name, status and
+conclusion, plus a rollup on the PR. `github.go:268` renders that rollup to
+clients today. **Every one of Galactics' nine scripts already lands in this
+database. Nothing was allowed to refuse on it.**
+
+### What it covers
+
+| gate-pr mechanism | count | expressible before | now |
+|---|---|---|---|
+| `script` | 9 | no | yes |
+| `CI` | 2 | no | yes |
+| `agent review` | 2 | yes | yes |
+
+2 of 13 → 13 of 13.
+
+### The head_sha join is the load-bearing line
+
+Check runs accumulate per commit. Joining them to the PR without matching
+`head_sha` would let a green run from three commits ago release a gate on a head
+nothing has checked — the exact failure a scripted gate exists to prevent, and
+silent. Measured: two green checks, `head_sha` moved, the gate refuses with *"has
+not reported on PR #412's current head"*; CI re-runs on the new head and it
+opens.
+
+### Vacuous truth is the trap
+
+*"Every required check succeeded"* is **true over an empty set**. An issue with
+no change proposal attached would pass a scripted gate on a naive reading, while
+the gate still reads as configured. That is a distinct refusal, and it is the
+first test in the file.
+
+### Fail closed, against this file's own habit
+
+Everywhere else in `level_gate.go` a failed lookup widens what is allowed —
+refusing because a COUNT failed would look like a rejected review. The scripted
+gate does the opposite: an unreadable check table refuses. The whole value of a
+gate nobody is asked is that it cannot be talked past, and "the database was
+briefly unavailable" is not evidence that nine scripts passed.
+
+Same reason check names are free text and not validated against a catalog: a
+check is whatever a workflow calls its job and can be renamed upstream without
+warning, so a gate naming a check that never reports must fail closed. A typo is
+then a gate that never opens, which is loud. Validating against checks seen so
+far would refuse a correct name the first time it is used.
+
+### Measured
+
+```
+qa gated on composition-guard + frontmatter-lint, in_review behind it
+
+no PR attached          REFUSED  "no change proposal is attached"
+one check in_progress   REFUSED  "frontmatter-lint ... still running on PR #412"
+that check fails        REFUSED  "frontmatter-lint ... concluded failure"
+both green              ok
+new commit pushed       REFUSED  "has not reported on PR #412's current head"
+CI green on new head    ok
+```
+
+**One honest note on a failure I caused.** A webhook dedupe test failed in the
+full package run while my hand-made PR fixture was still sitting in the shared
+database. I had inserted it for the CLI walk-through and not removed it.
+Deleting it made the package green. My leftover row, not the gate.
+
 ## What was NOT done
 
 - **No parallel ratification.** Gates queue; they cannot both hold a unit. Two
@@ -939,6 +1010,14 @@ agent-vs-human-gate cases both ran.
 - **Nothing reads the referential back.** A rule lands in `referential_entry` and
   is counted; no agent is handed it when it starts work. The loop is closed for
   measurement, not for use. That is the honest limit of §21.
+- **No verify step.** The gate exists; T4 does not. AP-5's criteria are markdown
+  checkboxes in a description and its verdicts are prose in a comment, so the
+  gate has nothing to read and asks a person instead. Two tables
+  (`acceptance_criterion`, `verdict`) and the four rules AP-5 already states
+  become mechanical. §23.
+- **Referentials are read-only.** Six built-ins, seeded lazily, no create
+  endpoint. Veezeet's own references — its domain model, its API contract —
+  cannot be added. `brand_register` and `product_direction` happen to be there.
 - **No UI for `level_policy`.** CLI and API only. The rung settings are the one
   part of the ladder a human cannot set from the product.
 - **No cycle check on dependencies**, deliberately: two units each waiting on
@@ -984,6 +1063,9 @@ agent-vs-human-gate cases both ran.
 - [x] read Galactics' own cycle, and recorded where the two models collide
 - [x] the trigger set, closed — and the answer scope that gives the count an output
 - [x] the gate and its ratifier, per rung — the first refusal in this spike
+- [x] the cycle verbs made findable, and `restate` under its own name
+- [x] the Galactic team seeded into a workspace, Veezeet beside it
+- [x] scripted gates — 13 of gate-pr's 13 checks now expressible
 
 Whether any of this is worth proposing upstream is a decision for later and was
 not part of this session.

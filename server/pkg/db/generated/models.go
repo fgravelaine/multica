@@ -1024,14 +1024,15 @@ type LarkUserBinding struct {
 }
 
 type LevelGate struct {
-	ID           pgtype.UUID        `json:"id"`
-	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
-	Level        string             `json:"level"`
-	Position     int32              `json:"position"`
-	StatusKey    string             `json:"status_key"`
-	RatifierType string             `json:"ratifier_type"`
-	RatifierID   pgtype.UUID        `json:"ratifier_id"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	Level          string             `json:"level"`
+	Position       int32              `json:"position"`
+	StatusKey      string             `json:"status_key"`
+	RatifierType   string             `json:"ratifier_type"`
+	RatifierID     pgtype.UUID        `json:"ratifier_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	RequiredChecks []string           `json:"required_checks"`
 }
 
 type LevelPolicy struct {

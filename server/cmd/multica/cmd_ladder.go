@@ -255,13 +255,21 @@ var levelGateCmd = &cobra.Command{
 		"Three things are always allowed, because a gate that traps a unit is\n" +
 		"worse than no gate: moving BACKWARDS, dropping to an earlier gate, and\n" +
 		"cancelling. Only forward progress is ratified.\n\n" +
-		"--ratifier is `human` (any member) or `agent` with --agent <id> (one\n" +
-		"named agent, so the agent that did the work cannot accept its own\n" +
-		"return).\n\n" +
+		"--ratifier is one of three:\n" +
+		"  human           any member\n" +
+		"  agent  --agent  one named agent, so the agent that did the work\n" +
+		"                  cannot accept its own return\n" +
+		"  check  --check  a script already answered; nobody is asked\n\n" +
+		"A check gate reads what GitHub reported for the change proposals\n" +
+		"attached to the issue, on each one's CURRENT head. It refuses when no\n" +
+		"proposal is attached, when a named check has not reported yet, and\n" +
+		"when one concluded anything but success. Repeat --check per name.\n\n" +
 		"Pass no rung to list every gate. Pass a rung and a position with no\n" +
 		"--status to clear that gate.\n\n" +
 		"Examples:\n" +
 		"  multica level-gate\n" +
+		"  multica level-gate task 1 --status qa --ratifier check \\\n" +
+		"      --check composition-guard --check frontmatter-lint\n" +
 		"  multica level-gate objective 1 --status qa --ratifier agent --agent <id>\n" +
 		"  multica level-gate objective 2 --status in_review\n" +
 		"  multica level-gate objective 2",
@@ -298,6 +306,13 @@ func runLevelGate(cmd *cobra.Command, args []string) error {
 			if id := strVal(g, "ratifier_id"); id != "" {
 				ratifier = ratifier + " " + id
 			}
+			if raw, ok := g["required_checks"].([]any); ok && len(raw) > 0 {
+				names := make([]string, 0, len(raw))
+				for _, n := range raw {
+					names = append(names, fmt.Sprint(n))
+				}
+				ratifier = ratifier + ": " + strings.Join(names, ", ")
+			}
 			fmt.Fprintf(w, "%s\t%v\t%s\t%s\n",
 				strVal(g, "level"), g["position"], strVal(g, "status_key"), ratifier)
 		}
@@ -319,15 +334,28 @@ func runLevelGate(cmd *cobra.Command, args []string) error {
 	status, _ := cmd.Flags().GetString("status")
 	ratifier, _ := cmd.Flags().GetString("ratifier")
 	agentID, _ := cmd.Flags().GetString("agent")
+	checks, _ := cmd.Flags().GetStringArray("check")
 
 	body := map[string]any{"position": position, "status_key": status}
 	if status != "" {
 		if ratifier == "" {
+			// A gate declared without saying who ratifies it defaults to a
+			// human. Defaulting to `check` would open a gate that names no
+			// check, and defaulting to `agent` has no agent to name.
 			ratifier = "human"
+		}
+		if len(checks) > 0 && ratifier == "human" && !cmd.Flags().Changed("ratifier") {
+			// --check alone says what is meant. Making the caller also type
+			// `--ratifier check` would be a second way to say the same thing,
+			// and a gate that silently ignored --check would be worse.
+			ratifier = "check"
 		}
 		body["ratifier_type"] = ratifier
 		if agentID != "" {
 			body["ratifier_id"] = agentID
+		}
+		if len(checks) > 0 {
+			body["required_checks"] = checks
 		}
 	}
 
@@ -340,6 +368,11 @@ func runLevelGate(cmd *cobra.Command, args []string) error {
 	}
 	if status == "" {
 		fmt.Printf("Gate %d cleared on %s.\n", position, rung)
+		return nil
+	}
+	if len(checks) > 0 {
+		fmt.Printf("%s gate %d: %s, ratified by %s (%s).\n",
+			rung, position, status, ratifier, strings.Join(checks, ", "))
 		return nil
 	}
 	fmt.Printf("%s gate %d: %s, ratified by %s.\n", rung, position, status, ratifier)
@@ -355,7 +388,8 @@ func init() {
 	levelPolicyCmd.Flags().String("output", "table", "Output format: table or json")
 
 	levelGateCmd.Flags().String("status", "", "Status a unit sits in while this gate holds it (empty clears the gate)")
-	levelGateCmd.Flags().String("ratifier", "", "Who accepts the return: human | agent (default human)")
+	levelGateCmd.Flags().String("ratifier", "", "Who accepts the return: human | agent | check (default human)")
+	levelGateCmd.Flags().StringArray("check", nil, "Check that must conclude success, exactly as GitHub names it. Repeatable; implies --ratifier check")
 	levelGateCmd.Flags().String("agent", "", "Agent id, required when --ratifier agent")
 	levelGateCmd.Flags().String("output", "table", "Output format: table or json")
 }
