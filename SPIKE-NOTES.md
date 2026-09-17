@@ -578,8 +578,143 @@ got wrong anyway on the first pass: Base UI items take `onClick`, not
 matches nothing, which is how a write reached the database while the panel kept
 reading "Undeclared".
 
+# Part three — the collision
+
+The spike designed a vocabulary and a raised hand next to a model that was
+already written. `operating-model/cycle/levels.md` and `.../raised-hand.md` are
+`status: accepted` in Galactics and were not read until after all of the above
+was built. This section is what reading them cost.
+
+## 14. Galactics' worked example is the one this spike rebuilt
+
+Its ladder, in its own words:
+
+| | the work | unit produced |
+|---|---|---|
+| N0 · direction | make the planner the core of the product | missions |
+| N1 · mission | **the trip planner** | sub-missions |
+| N2 · sub-mission | **build the day-by-day itinerary** | features |
+| N3 · feature | **compose a day from the chosen places** | tickets |
+| N4 · ticket | **the daily timeline component** | split, NOT delegated |
+
+Those are SPIK-7, SPIK-10 and SPIK-13. The spike reconstructed Galactics' own
+example from a mission description and never noticed where it came from.
+
+## 15. Two five-level models, and one word at two ranks
+
+| the spike | Galactics |
+|---|---|
+| Campaign | N0 · direction |
+| Mission | N1 · mission |
+| Objective | N2 · sub-mission |
+| Task | N3 · feature |
+| Step | N4 · ticket |
+
+`campaign` is the collision. In Galactics it is **N2 of the content lane** — a
+sub-level under a sub-mission. The spike put it at the top. One word, two ranks,
+inside one system.
+
+**And the shapes differ, not just the labels.** A Galactics level declares five
+parameters and "a project that declares four is not running the cycle": the
+reference it argues against, the unit produced, the gate that closes verify, who
+ratifies, and the delegation boundary. `issue.level` plus `level_policy`
+declares one — what the rung runs on.
+
+Where the tree runs out, checked field by field:
+
+| Galactics parameter | Multica holds it? |
+|---|---|
+| the reference | **yes** — `referential`, arrived at independently |
+| the unit produced | implicit: the child rung |
+| the gate that closes verify | **nothing** |
+| who ratifies | **nothing.** Assignee is who does it, not who accepts it |
+| the delegation boundary | partly — `step` folds, which is N4's "split, not delegated" |
+
+Two of five have nowhere to live. That is the answer to "can Multica carry
+Galactics' levels": it can carry their ORDER and their names, and it cannot
+carry what makes them levels.
+
+## 16. The raised hand: three of four, and the missing one was recorded
+
+Galactics names four things a tool must carry, "both the minimum and the
+maximum":
+
+1. **a state that remembers where it came from** — WAS MISSING. This spike
+   parked to a constant (`backlog`) and resumed to a constant (`todo`), so a
+   unit that stopped at `in_review` came back as `todo`: work waiting on a
+   reviewer silently became work waiting to be picked up. Migration 486 records
+   `status_before`; `in_review → backlog → in_review` now round-trips.
+2. a recipient — built.
+3. a field the payload fits in — built, with the costs.
+4. a resume — built.
+
+## 17. The third wall: resume is coupled to one transition
+
+Galactics: *"the unit resumes at the beat it stopped at. Not at T1."*
+
+Multica re-fires a run on exactly one transition, `backlog → todo`. So restoring
+the previous state and resuming the run are the SAME WRITE and it can only have
+one value. A unit cannot both go back to where it was and be picked up again.
+
+Not a fudge in the resolution, because the two cases want different things: a
+hand raised at `in_review` was waiting on a reviewer, so returning it there and
+firing no run *is* the beat it stopped at. What stays broken is a unit parked
+from any other non-`todo` status — it resumes without its run, and nothing in
+the product can express "restore this status AND re-dispatch".
+
+## 18. The trigger set is closed, and this spike has no trigger at all
+
+Galactics names three, and says the set is closed: a `block` found at framing;
+three failures in a row; a contradiction discovered in flight.
+
+`raised_hand` has no trigger column. Any agent may raise one for any reason. And
+Galactics states the exact consequence:
+
+> an open trigger set makes the raised hand the default exit, and then the
+> counter measures how tired an agent is rather than where the references are
+> thin.
+
+That is a direct hit on the referential diagnostic and the per-lead contest
+ratio built here. Both count hands. Without a closed trigger set they count what
+that sentence says they count.
+
+## 19. `answered_by_level` is the wrong thing under the right name
+
+Galactics says three things come back, in order: the answer; **its level** — a
+rule, or a local choice; and the diff that follows. A rule *"goes up into the
+reference and the unit carries a pointer to it"*.
+
+This spike's `answered_by_level` records WHO answered — lead or human. Same
+word, different concept, and the real one is absent.
+
+**That absence is the largest finding in part three.** The referential
+diagnostic measures which body of knowledge is too thin to answer on its own,
+and there is no path from an answer back into that body. Hands get counted
+forever and no referential ever gets thicker. Galactics' model closes that loop;
+this implementation opens it and leaves it open.
+
+## 20. What did converge, without either side knowing
+
+- `referential` is Galactics' **reference**, built independently from a one-line
+  brief, down to `unclassified` being a countable key.
+- "the unit parks alone, its neighbours carry on" — implemented, and it cost
+  nothing because no such coupling existed.
+- "it goes to the lead, not to the top", and the lead **contests first** — the
+  recipient chain and the contest ratio are that sentence, measured.
+- the payload is never an open question; bounded options with the cost of being
+  wrong on each side, plus a recommendation — enforced by the CLI, which refuses
+  an option without a cost.
+
+Four of Galactics' rules were rebuilt from a product brief by someone who had
+not read them. That is worth as much as the collisions: it says the model is
+reachable from the problem, not only from the document.
+
 ## What was NOT done
 
+- **No trigger on a raised hand**, so the closed set of three is unenforced and
+  the counters measure what §18 warns about.
+- **No rule-vs-local-choice on an answer**, so no answer ever reaches a
+  referential and §19's loop stays open.
 - **No UI for `level_policy`.** CLI and API only. The rung settings are the one
   part of the ladder a human cannot set from the product.
 - **No cycle check on dependencies**, deliberately: two units each waiting on

@@ -1242,6 +1242,7 @@ type RaisedHand struct {
 	EscalationNote    pgtype.Text        `json:"escalation_note"`
 	AnsweredByLevel   pgtype.Text        `json:"answered_by_level"`
 	EscalatedByLeadID pgtype.UUID        `json:"escalated_by_lead_id"`
+	StatusBefore      pgtype.Text        `json:"status_before"`
 }
 
 type Referential struct {

@@ -71,9 +71,30 @@ const (
 // The raised hand object itself is what tells those two apart.
 const parkedStatus = issuestatus.Backlog
 
-// resumeStatus is where answering puts the unit back. backlog → todo is the
-// transition the product already re-triggers on, so the resume is not written
-// here; it is WillEnqueueRun doing what it already does.
+// resumeStatus is where answering puts a unit back when nothing better is
+// recorded. backlog → todo is the transition the product already re-triggers
+// on, so the resume is not written here; it is WillEnqueueRun doing what it
+// already does.
+//
+// THE THIRD WALL, and it is in the resume rather than the park.
+//
+// Galactics' raised-hand spec says a unit "resumes at the beat it stopped at.
+// Not at T1." Multica couples resuming the RUN to one specific transition:
+// backlog → todo, and nothing else. So a hand cannot both restore the previous
+// state and re-fire the run — the two are the same write, and it can only have
+// one value.
+//
+// What is done about it, and why it is not a fudge: restore status_before, and
+// let the run re-fire only when that restoration happens to be backlog → todo.
+// This is correct rather than merely convenient. A hand raised while the unit
+// was in_review was waiting on a REVIEWER; returning it to in_review and firing
+// no run resumes exactly the beat it stopped at. A hand raised mid-run returns
+// to todo and the run re-fires. The two cases want different things and the
+// recorded status is what tells them apart.
+//
+// What stays broken: a unit parked from a status that is neither todo nor a
+// review state resumes without its run. Nothing in the product can express
+// "restore this status AND re-dispatch" in one write.
 const resumeStatus = issuestatus.Todo
 
 // RaiseHand records a raised hand and parks its issue.
@@ -205,6 +226,8 @@ func (h *Handler) RaiseHand(w http.ResponseWriter, r *http.Request) {
 		ReferentialKey: pgtype.Text{String: referential, Valid: true},
 		RecipientType:  recipientType,
 		RecipientID:    recipientID,
+		// Read before the park below overwrites it.
+		StatusBefore: pgtype.Text{String: issue.Status, Valid: issue.Status != ""},
 	})
 	if err != nil {
 		// The partial unique index on (issue_id) WHERE status = 'open' is what
@@ -217,6 +240,10 @@ func (h *Handler) RaiseHand(w http.ResponseWriter, r *http.Request) {
 	// Park the unit. One raised hand stops ONE unit — nothing here touches any
 	// sibling issue, which is the design note's "les quatre autres tickets
 	// continuent" and costs nothing to honour because no such coupling exists.
+	//
+	// issue.Status was read before this write, and it is what the answer
+	// restores. Recording it is the first of the four things a raised hand must
+	// carry: a state that remembers where it came from.
 	if _, err := h.Queries.UpdateIssueStatus(r.Context(), db.UpdateIssueStatusParams{
 		ID:          issue.ID,
 		Status:      parkedStatus,
@@ -346,9 +373,16 @@ func (h *Handler) AnswerHand(w http.ResponseWriter, r *http.Request) {
 	h.postHandAnswerComment(r, issue, hand.Question, chosen, req.Answer, actorType, actorID)
 
 	prevStatus := issue.Status
+	// Where the unit was when it stopped, when that was recorded. A hand raised
+	// before status_before existed has none, and falls back to the old constant
+	// rather than having a previous status invented for it.
+	resumeTo := resumeStatus
+	if hand.StatusBefore.Valid && hand.StatusBefore.String != "" && hand.StatusBefore.String != parkedStatus {
+		resumeTo = hand.StatusBefore.String
+	}
 	promoted, err := h.Queries.UpdateIssueStatus(r.Context(), db.UpdateIssueStatusParams{
 		ID:          issue.ID,
-		Status:      resumeStatus,
+		Status:      resumeTo,
 		WorkspaceID: issue.WorkspaceID,
 	})
 	if err != nil {

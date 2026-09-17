@@ -5,12 +5,12 @@
 INSERT INTO raised_hand (
     workspace_id, issue_id, agent_id, task_id,
     question, options, recommendation, material, referential_key,
-    recipient_type, recipient_id
+    recipient_type, recipient_id, status_before
 ) VALUES (
     @workspace_id, @issue_id, sqlc.narg(agent_id), sqlc.narg(task_id),
     @question, @options, sqlc.narg(recommendation), sqlc.narg(material),
     sqlc.narg(referential_key),
-    @recipient_type, sqlc.narg(recipient_id)
+    @recipient_type, sqlc.narg(recipient_id), sqlc.narg(status_before)
 )
 RETURNING *;
 
