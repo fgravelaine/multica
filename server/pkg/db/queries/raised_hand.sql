@@ -5,12 +5,13 @@
 INSERT INTO raised_hand (
     workspace_id, issue_id, agent_id, task_id,
     question, options, recommendation, material, referential_key,
-    recipient_type, recipient_id, status_before
+    recipient_type, recipient_id, status_before, trigger
 ) VALUES (
     @workspace_id, @issue_id, sqlc.narg(agent_id), sqlc.narg(task_id),
     @question, @options, sqlc.narg(recommendation), sqlc.narg(material),
     sqlc.narg(referential_key),
-    @recipient_type, sqlc.narg(recipient_id), sqlc.narg(status_before)
+    @recipient_type, sqlc.narg(recipient_id), sqlc.narg(status_before),
+    sqlc.narg(trigger)
 )
 RETURNING *;
 
@@ -98,6 +99,10 @@ SET status            = 'answered',
     answer            = sqlc.narg(answer),
     answered_by       = sqlc.narg(answered_by),
     answered_by_level = @answered_by_level,
+    -- Whether this binds one unit or goes up into the reference. See
+    -- migration 487: the two are different facts and answered_by_level, which
+    -- records WHO answered, is not one of them.
+    answer_scope      = sqlc.narg(answer_scope),
     answered_at       = now()
 WHERE id = @id AND status = 'open'
 RETURNING *;
@@ -132,3 +137,42 @@ WHERE h.issue_id = ANY(@issue_ids::uuid[])
   AND COALESCE(h.recipient_id, h.escalated_by_lead_id) IS NOT NULL
 GROUP BY 1, 2
 ORDER BY 3 DESC;
+
+-- name: AddReferentialEntry :one
+-- What an answered RULE leaves in the body of knowledge it came from.
+--
+-- The whole point of the referential diagnostic: counting which reference is
+-- too thin to answer on its own is only half a loop, and this is the other
+-- half. Without it a workspace measures the same thinness forever.
+INSERT INTO referential_entry (workspace_id, referential_key, statement, source_hand_id)
+VALUES (@workspace_id, @referential_key, @statement, sqlc.narg(source_hand_id))
+RETURNING *;
+
+-- name: ListReferentialEntries :many
+-- A referential's accumulated rules, newest first, each with the question that
+-- produced it.
+SELECT e.id, e.referential_key, e.statement, e.created_at,
+       h.question AS source_question
+FROM referential_entry e
+LEFT JOIN raised_hand h ON h.id = e.source_hand_id
+WHERE e.workspace_id = @workspace_id
+  AND (sqlc.narg(referential_key)::text IS NULL OR e.referential_key = sqlc.narg(referential_key)::text)
+ORDER BY e.created_at DESC;
+
+-- name: CountReferentialLoop :many
+-- Per referential: how many hands it could not answer, and how many of those
+-- ANSWERS came back as rules.
+--
+-- The second number is the one that says whether the reference is getting
+-- thicker. A referential with twelve hands and zero rules is being asked the
+-- same kind of question repeatedly and learning nothing from it.
+SELECT
+    h.referential_key,
+    COUNT(*)::int                                                  AS hands,
+    COUNT(*) FILTER (WHERE h.answer_scope = 'rule')::int           AS rules,
+    COUNT(*) FILTER (WHERE h.answer_scope = 'local')::int          AS local_choices,
+    COUNT(*) FILTER (WHERE h.status = 'open')::int                 AS still_open
+FROM raised_hand h
+WHERE h.workspace_id = @workspace_id AND h.referential_key IS NOT NULL
+GROUP BY h.referential_key
+ORDER BY 2 DESC;

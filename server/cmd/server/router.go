@@ -2016,6 +2016,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Get("/api/missions", h.ListMissions)
 			// SPIKE: what a rung costs to run. One persona keeps one identity;
 			// the level of the work picks the model, thinking and tier.
+			// SPIKE: whether a referential is learning anything, not just how
+			// often it fails to answer.
+			r.Get("/api/referentials/loop", h.GetReferentialLoop)
 			r.Get("/api/level-policies", h.ListLevelPolicies)
 			r.Put("/api/level-policies/{level}", h.SetLevelPolicy)
 

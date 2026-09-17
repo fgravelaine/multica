@@ -12,7 +12,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -69,6 +71,15 @@ const (
 // calls *parking*, so this reuses it rather than inventing a second one — at the
 // cost of conflating "never started" with "stopped mid-flight for a decision".
 // The raised hand object itself is what tells those two apart.
+// handTriggers is the closed set. Three, and no fourth — a fourth is a change
+// to Galactics' raised-hand.md, not a judgement call in a session.
+var handTriggers = []string{"block", "three_failures", "contradiction"}
+
+// answerScopes is what an answer binds. A local choice dies with its unit; a
+// rule goes up into the reference, which is the only way a referential gets
+// thicker.
+var answerScopes = []string{"rule", "local"}
+
 const parkedStatus = issuestatus.Backlog
 
 // resumeStatus is where answering puts a unit back when nothing better is
@@ -121,6 +132,12 @@ func (h *Handler) RaiseHand(w http.ResponseWriter, r *http.Request) {
 		// for a raiser that genuinely cannot tell — which is a finding rather
 		// than a gap, and countable as such.
 		Referential string `json:"referential"`
+		// Trigger is WHY the hand went up, from a closed set of three. Required
+		// for the same reason the referential is: both counters here are counts,
+		// and Galactics states what an open trigger set does to them — "the
+		// counter measures how tired an agent is rather than where the
+		// references are thin".
+		Trigger string `json:"trigger"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -169,6 +186,23 @@ func (h *Handler) RaiseHand(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to seed referentials")
 		return
 	}
+	// The trigger, from the closed set of three. Validated before the
+	// referential so a hand missing both is told about the harder one first:
+	// picking a referential is a lookup, naming a trigger is a claim about what
+	// actually happened.
+	trigger := strings.TrimSpace(req.Trigger)
+	if trigger == "" {
+		writeError(w, http.StatusBadRequest,
+			"trigger is required: one of "+strings.Join(handTriggers, ", ")+
+				" — a hand with no trigger makes the counters measure fatigue rather than thin references")
+		return
+	}
+	if !slices.Contains(handTriggers, trigger) {
+		writeError(w, http.StatusBadRequest,
+			"unknown trigger "+strconv.Quote(trigger)+" — the set is closed: "+strings.Join(handTriggers, ", "))
+		return
+	}
+
 	referential := strings.TrimSpace(req.Referential)
 	if referential == "" {
 		writeError(w, http.StatusBadRequest,
@@ -228,6 +262,7 @@ func (h *Handler) RaiseHand(w http.ResponseWriter, r *http.Request) {
 		RecipientID:    recipientID,
 		// Read before the park below overwrites it.
 		StatusBefore: pgtype.Text{String: issue.Status, Valid: issue.Status != ""},
+		Trigger:      pgtype.Text{String: trigger, Valid: true},
 	})
 	if err != nil {
 		// The partial unique index on (issue_id) WHERE status = 'open' is what
@@ -296,6 +331,21 @@ func (h *Handler) AnswerHand(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ChosenOption string `json:"chosen_option"`
 		Answer       string `json:"answer"`
+		// Scope is the second of the three things Galactics says come back from
+		// a raised hand: the answer, ITS LEVEL — a rule or a local choice — and
+		// the diff that follows. A local choice binds this unit and dies with
+		// it; a rule goes UP INTO the reference, and is the only way a
+		// referential ever gets thicker than the day it was seeded.
+		//
+		// Optional, and defaults to `local`. Defaulting the other way would put
+		// every off-hand decision into the body of knowledge, which is how a
+		// reference becomes something nobody trusts.
+		Scope string `json:"scope"`
+		// Rule is what goes into the referential when Scope is `rule`. Distinct
+		// from Answer on purpose: the answer explains a decision to the unit
+		// that asked, the rule has to stand on its own to a reader who was not
+		// there and does not know the question.
+		Rule string `json:"rule"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -348,12 +398,36 @@ func (h *Handler) AnswerHand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	answererID, _ := util.ParseUUID(userID)
+	// A local choice unless somebody says otherwise. Defaulting to `rule` would
+	// put every off-hand decision into the body of knowledge, which is how a
+	// reference becomes something nobody trusts.
+	scope := strings.TrimSpace(req.Scope)
+	if scope == "" {
+		scope = "local"
+	}
+	if !slices.Contains(answerScopes, scope) {
+		writeError(w, http.StatusBadRequest,
+			"unknown scope "+strconv.Quote(scope)+": one of "+strings.Join(answerScopes, ", "))
+		return
+	}
+	rule := strings.TrimSpace(req.Rule)
+	if scope == "rule" && rule == "" {
+		// A rule with nothing written down is a local choice wearing a label,
+		// and it would inflate the one number that says whether a referential
+		// is learning anything.
+		writeError(w, http.StatusBadRequest,
+			"a rule needs a statement: what goes into the referential, written so it stands "+
+				"without the question that produced it")
+		return
+	}
+
 	answered, err := h.Queries.AnswerRaisedHand(r.Context(), db.AnswerRaisedHandParams{
 		ID:              hand.ID,
 		ChosenOption:    pgtype.Text{String: chosen.Key, Valid: true},
 		Answer:          pgtype.Text{String: req.Answer, Valid: req.Answer != ""},
 		AnsweredBy:      answererID,
 		AnsweredByLevel: pgtype.Text{String: level, Valid: true},
+		AnswerScope:     pgtype.Text{String: scope, Valid: true},
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -365,6 +439,28 @@ func (h *Handler) AnswerHand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.Metrics.RecordRaisedHandSettled(hand.ReferentialKey.String, level)
+
+	// The other half of the loop. Counting which reference is too thin to answer
+	// on its own is only a diagnosis; this is the only thing in the system that
+	// treats it.
+	//
+	// Best-effort, and deliberately so: the decision is already recorded and the
+	// unit is about to resume. Failing the request here would strand a unit over
+	// a bookkeeping write. It is logged instead — and this is written down in
+	// the report as a place a transaction belongs.
+	if scope == "rule" && hand.ReferentialKey.Valid {
+		if _, entryErr := h.Queries.AddReferentialEntry(r.Context(), db.AddReferentialEntryParams{
+			WorkspaceID:    issue.WorkspaceID,
+			ReferentialKey: hand.ReferentialKey.String,
+			Statement:      rule,
+			SourceHandID:   pgtype.UUID{Bytes: hand.ID.Bytes, Valid: true},
+		}); entryErr != nil {
+			slog.Error("answer recorded but the rule did not reach its referential",
+				"hand_id", uuidToString(hand.ID),
+				"referential", hand.ReferentialKey.String,
+				"error", entryErr)
+		}
+	}
 
 	// The decision has to be readable by the resumed run, and a comment is the
 	// only channel the agent already reads. So the object does not REPLACE the

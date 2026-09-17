@@ -1243,6 +1243,8 @@ type RaisedHand struct {
 	AnsweredByLevel   pgtype.Text        `json:"answered_by_level"`
 	EscalatedByLeadID pgtype.UUID        `json:"escalated_by_lead_id"`
 	StatusBefore      pgtype.Text        `json:"status_before"`
+	Trigger           pgtype.Text        `json:"trigger"`
+	AnswerScope       pgtype.Text        `json:"answer_scope"`
 }
 
 type Referential struct {
@@ -1256,6 +1258,15 @@ type Referential struct {
 	ArchivedAt  pgtype.Timestamptz `json:"archived_at"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ReferentialEntry struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	ReferentialKey string             `json:"referential_key"`
+	Statement      string             `json:"statement"`
+	SourceHandID   pgtype.UUID        `json:"source_hand_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
 type RuntimeProfile struct {

@@ -678,6 +678,8 @@ That is a direct hit on the referential diagnostic and the per-lead contest
 ratio built here. Both count hands. Without a closed trigger set they count what
 that sentence says they count.
 
+**Closed in §21.** `raised_hand.trigger`, required, CHECK in the three.
+
 ## 19. `answered_by_level` is the wrong thing under the right name
 
 Galactics says three things come back, in order: the answer; **its level** — a
@@ -692,6 +694,9 @@ diagnostic measures which body of knowledge is too thin to answer on its own,
 and there is no path from an answer back into that body. Hands get counted
 forever and no referential ever gets thicker. Galactics' model closes that loop;
 this implementation opens it and leaves it open.
+
+**Closed in §21.** `answer_scope`, plus a `referential_entry` table that is where
+a rule lands.
 
 ## 20. What did converge, without either side knowing
 
@@ -709,12 +714,81 @@ Four of Galactics' rules were rebuilt from a product brief by someone who had
 not read them. That is worth as much as the collisions: it says the model is
 reachable from the problem, not only from the document.
 
+## 21. Both ends of the loop, closed
+
+§18 and §19 are the same finding from two sides. One says the count is polluted
+at the input; the other says the count has no output. Each one alone leaves a
+number that means nothing, so both were built.
+
+**The trigger.** `raised_hand.trigger`, required, CHECK constrained to `block`,
+`three_failures`, `contradiction`. Refused at the CLI before the request leaves,
+and again at the handler, because the CLI is not the only client. A refused
+trigger writes no row at all — a hand that parks its unit and then fails
+validation would be worse than accepting a fourth trigger.
+
+Adding a fourth is now a migration. That is the point: Galactics says the set is
+closed and a fourth "is a change to this file, not a judgement call in a
+session". A CHECK constraint is what that sentence looks like in a database.
+
+**The scope.** `raised_hand.answer_scope`, `rule` or `local`, defaulting to
+`local`. Defaulting the other way would put every off-hand decision into the
+body of knowledge, which is how a reference becomes something nobody trusts.
+
+A `rule` needs a statement, and an empty one is a 400. A rule with nothing
+written down is a local choice wearing a label, and it would raise the one
+number this exists to expose.
+
+**Where a rule lands.** New table `referential_entry` — workspace, referential
+key, statement, and the hand that produced it. Three decisions in it:
+
+- `referential_key` is TEXT, not an FK. Same reason `raised_hand` does not key
+  it either: an entry must outlive the catalog row it names.
+- `source_hand_id` is `ON DELETE SET NULL`, not CASCADE. A rule outlives the
+  question that produced it. A reference that empties itself when old hands are
+  cleaned up never accumulates anything.
+- the write is **best-effort**, logged at `slog.Error` on failure and never
+  rolled back onto the answer. A bookkeeping write must not strand a unit that
+  is trying to resume. This is a deliberate correctness trade and it is the
+  weakest line in §21 — the right shape is one transaction over answer,
+  comment, entry and promotion, which §"What was NOT done" already names for the
+  comment.
+
+**The readout.** `GET /api/referentials/loop`, and `multica referential loop`:
+
+```
+REFERENTIAL        HANDS  RULES  LOCAL  OPEN
+design_system      8      1      0      0
+architecture       2      0      0      0
+product_direction  2      0      0      0
+api_contract       2      0      1      0
+```
+
+RULES is the column that was missing. Hands alone cannot distinguish a reference
+that is steadily learning from one being asked the same kind of question over
+and over — both render as a large number. `design_system` at eight hands and one
+rule is the first thing in this spike that says which one it is.
+
+Six of those eight hands predate the column and are neither `rule` nor `local`.
+They are left NULL rather than backfilled to a default. Guessing the scope of an
+answer nobody declared would put a made-up number in the one column built to
+stop made-up numbers.
+
+**Measured end to end, twice.** A hand with no trigger is refused; `tired` is
+refused; each of the three is accepted and recorded. An answer with `--rule`
+writes the statement and the count moves 8/0 → 8/1. An answer without it moves
+LOCAL and writes nothing up. Both units came back to `todo` — the state they
+were in, which is §"migration 486" doing its job.
+
 ## What was NOT done
 
-- **No trigger on a raised hand**, so the closed set of three is unenforced and
-  the counters measure what §18 warns about.
-- **No rule-vs-local-choice on an answer**, so no answer ever reaches a
-  referential and §19's loop stays open.
+- **No gate and no ratifier per rung.** Two of Galactics' five level parameters
+  have nowhere to live in Multica, and unlike the other three this is not one
+  field — a gate is a thing with the right to say no, and nothing in the product
+  has that shape. Not started: it needs a decision about what a gate is allowed
+  to do before any of it can be designed.
+- **Nothing reads the referential back.** A rule lands in `referential_entry` and
+  is counted; no agent is handed it when it starts work. The loop is closed for
+  measurement, not for use. That is the honest limit of §21.
 - **No UI for `level_policy`.** CLI and API only. The rung settings are the one
   part of the ladder a human cannot set from the product.
 - **No cycle check on dependencies**, deliberately: two units each waiting on
@@ -757,6 +831,8 @@ reachable from the problem, not only from the document.
 - [x] the leveled board, and orphans that can be found
 - [x] a wait that crosses a tree — issue_dependency brought to life
 - [x] what a rung runs on — level_policy, no daemon change
+- [x] read Galactics' own cycle, and recorded where the two models collide
+- [x] the trigger set, closed — and the answer scope that gives the count an output
 
 Whether any of this is worth proposing upstream is a decision for later and was
 not part of this session.

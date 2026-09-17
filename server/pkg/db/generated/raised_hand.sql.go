@@ -11,6 +11,43 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const addReferentialEntry = `-- name: AddReferentialEntry :one
+INSERT INTO referential_entry (workspace_id, referential_key, statement, source_hand_id)
+VALUES ($1, $2, $3, $4)
+RETURNING id, workspace_id, referential_key, statement, source_hand_id, created_at
+`
+
+type AddReferentialEntryParams struct {
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	ReferentialKey string      `json:"referential_key"`
+	Statement      string      `json:"statement"`
+	SourceHandID   pgtype.UUID `json:"source_hand_id"`
+}
+
+// What an answered RULE leaves in the body of knowledge it came from.
+//
+// The whole point of the referential diagnostic: counting which reference is
+// too thin to answer on its own is only half a loop, and this is the other
+// half. Without it a workspace measures the same thinness forever.
+func (q *Queries) AddReferentialEntry(ctx context.Context, arg AddReferentialEntryParams) (ReferentialEntry, error) {
+	row := q.db.QueryRow(ctx, addReferentialEntry,
+		arg.WorkspaceID,
+		arg.ReferentialKey,
+		arg.Statement,
+		arg.SourceHandID,
+	)
+	var i ReferentialEntry
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ReferentialKey,
+		&i.Statement,
+		&i.SourceHandID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const answerRaisedHand = `-- name: AnswerRaisedHand :one
 UPDATE raised_hand
 SET status            = 'answered',
@@ -18,9 +55,13 @@ SET status            = 'answered',
     answer            = $2,
     answered_by       = $3,
     answered_by_level = $4,
+    -- Whether this binds one unit or goes up into the reference. See
+    -- migration 487: the two are different facts and answered_by_level, which
+    -- records WHO answered, is not one of them.
+    answer_scope      = $5,
     answered_at       = now()
-WHERE id = $5 AND status = 'open'
-RETURNING id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at, referential_key, recipient_type, recipient_id, escalated_at, escalation_note, answered_by_level, escalated_by_lead_id, status_before
+WHERE id = $6 AND status = 'open'
+RETURNING id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at, referential_key, recipient_type, recipient_id, escalated_at, escalation_note, answered_by_level, escalated_by_lead_id, status_before, trigger, answer_scope
 `
 
 type AnswerRaisedHandParams struct {
@@ -28,6 +69,7 @@ type AnswerRaisedHandParams struct {
 	Answer          pgtype.Text `json:"answer"`
 	AnsweredBy      pgtype.UUID `json:"answered_by"`
 	AnsweredByLevel pgtype.Text `json:"answered_by_level"`
+	AnswerScope     pgtype.Text `json:"answer_scope"`
 	ID              pgtype.UUID `json:"id"`
 }
 
@@ -40,6 +82,7 @@ func (q *Queries) AnswerRaisedHand(ctx context.Context, arg AnswerRaisedHandPara
 		arg.Answer,
 		arg.AnsweredBy,
 		arg.AnsweredByLevel,
+		arg.AnswerScope,
 		arg.ID,
 	)
 	var i RaisedHand
@@ -67,6 +110,8 @@ func (q *Queries) AnswerRaisedHand(ctx context.Context, arg AnswerRaisedHandPara
 		&i.AnsweredByLevel,
 		&i.EscalatedByLeadID,
 		&i.StatusBefore,
+		&i.Trigger,
+		&i.AnswerScope,
 	)
 	return i, err
 }
@@ -112,6 +157,59 @@ func (q *Queries) CountMissionHands(ctx context.Context, issueIds []pgtype.UUID)
 	return i, err
 }
 
+const countReferentialLoop = `-- name: CountReferentialLoop :many
+SELECT
+    h.referential_key,
+    COUNT(*)::int                                                  AS hands,
+    COUNT(*) FILTER (WHERE h.answer_scope = 'rule')::int           AS rules,
+    COUNT(*) FILTER (WHERE h.answer_scope = 'local')::int          AS local_choices,
+    COUNT(*) FILTER (WHERE h.status = 'open')::int                 AS still_open
+FROM raised_hand h
+WHERE h.workspace_id = $1 AND h.referential_key IS NOT NULL
+GROUP BY h.referential_key
+ORDER BY 2 DESC
+`
+
+type CountReferentialLoopRow struct {
+	ReferentialKey pgtype.Text `json:"referential_key"`
+	Hands          int32       `json:"hands"`
+	Rules          int32       `json:"rules"`
+	LocalChoices   int32       `json:"local_choices"`
+	StillOpen      int32       `json:"still_open"`
+}
+
+// Per referential: how many hands it could not answer, and how many of those
+// ANSWERS came back as rules.
+//
+// The second number is the one that says whether the reference is getting
+// thicker. A referential with twelve hands and zero rules is being asked the
+// same kind of question repeatedly and learning nothing from it.
+func (q *Queries) CountReferentialLoop(ctx context.Context, workspaceID pgtype.UUID) ([]CountReferentialLoopRow, error) {
+	rows, err := q.db.Query(ctx, countReferentialLoop, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountReferentialLoopRow{}
+	for rows.Next() {
+		var i CountReferentialLoopRow
+		if err := rows.Scan(
+			&i.ReferentialKey,
+			&i.Hands,
+			&i.Rules,
+			&i.LocalChoices,
+			&i.StillOpen,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const escalateRaisedHand = `-- name: EscalateRaisedHand :one
 UPDATE raised_hand
 SET recipient_type       = 'human',
@@ -125,7 +223,7 @@ SET recipient_type       = 'human',
 WHERE id = $2
   AND status = 'open'
   AND recipient_type = 'lead'
-RETURNING id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at, referential_key, recipient_type, recipient_id, escalated_at, escalation_note, answered_by_level, escalated_by_lead_id, status_before
+RETURNING id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at, referential_key, recipient_type, recipient_id, escalated_at, escalation_note, answered_by_level, escalated_by_lead_id, status_before, trigger, answer_scope
 `
 
 type EscalateRaisedHandParams struct {
@@ -163,12 +261,14 @@ func (q *Queries) EscalateRaisedHand(ctx context.Context, arg EscalateRaisedHand
 		&i.AnsweredByLevel,
 		&i.EscalatedByLeadID,
 		&i.StatusBefore,
+		&i.Trigger,
+		&i.AnswerScope,
 	)
 	return i, err
 }
 
 const getOpenHandForIssue = `-- name: GetOpenHandForIssue :one
-SELECT id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at, referential_key, recipient_type, recipient_id, escalated_at, escalation_note, answered_by_level, escalated_by_lead_id, status_before FROM raised_hand
+SELECT id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at, referential_key, recipient_type, recipient_id, escalated_at, escalation_note, answered_by_level, escalated_by_lead_id, status_before, trigger, answer_scope FROM raised_hand
 WHERE issue_id = $1 AND status = 'open'
 `
 
@@ -199,12 +299,14 @@ func (q *Queries) GetOpenHandForIssue(ctx context.Context, issueID pgtype.UUID) 
 		&i.AnsweredByLevel,
 		&i.EscalatedByLeadID,
 		&i.StatusBefore,
+		&i.Trigger,
+		&i.AnswerScope,
 	)
 	return i, err
 }
 
 const getRaisedHand = `-- name: GetRaisedHand :one
-SELECT id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at, referential_key, recipient_type, recipient_id, escalated_at, escalation_note, answered_by_level, escalated_by_lead_id, status_before FROM raised_hand WHERE id = $1
+SELECT id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at, referential_key, recipient_type, recipient_id, escalated_at, escalation_note, answered_by_level, escalated_by_lead_id, status_before, trigger, answer_scope FROM raised_hand WHERE id = $1
 `
 
 func (q *Queries) GetRaisedHand(ctx context.Context, id pgtype.UUID) (RaisedHand, error) {
@@ -234,12 +336,14 @@ func (q *Queries) GetRaisedHand(ctx context.Context, id pgtype.UUID) (RaisedHand
 		&i.AnsweredByLevel,
 		&i.EscalatedByLeadID,
 		&i.StatusBefore,
+		&i.Trigger,
+		&i.AnswerScope,
 	)
 	return i, err
 }
 
 const listHandsForIssue = `-- name: ListHandsForIssue :many
-SELECT id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at, referential_key, recipient_type, recipient_id, escalated_at, escalation_note, answered_by_level, escalated_by_lead_id, status_before FROM raised_hand
+SELECT id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at, referential_key, recipient_type, recipient_id, escalated_at, escalation_note, answered_by_level, escalated_by_lead_id, status_before, trigger, answer_scope FROM raised_hand
 WHERE issue_id = $1
 ORDER BY created_at DESC
 `
@@ -277,6 +381,8 @@ func (q *Queries) ListHandsForIssue(ctx context.Context, issueID pgtype.UUID) ([
 			&i.AnsweredByLevel,
 			&i.EscalatedByLeadID,
 			&i.StatusBefore,
+			&i.Trigger,
+			&i.AnswerScope,
 		); err != nil {
 			return nil, err
 		}
@@ -357,7 +463,7 @@ func (q *Queries) ListMissionLeadContest(ctx context.Context, issueIds []pgtype.
 }
 
 const listOpenHandsInWorkspace = `-- name: ListOpenHandsInWorkspace :many
-SELECT h.id, h.workspace_id, h.issue_id, h.agent_id, h.task_id, h.question, h.options, h.recommendation, h.material, h.status, h.chosen_option, h.answer, h.answered_by, h.created_at, h.answered_at, h.referential_key, h.recipient_type, h.recipient_id, h.escalated_at, h.escalation_note, h.answered_by_level, h.escalated_by_lead_id, h.status_before, i.number AS issue_number, i.title AS issue_title
+SELECT h.id, h.workspace_id, h.issue_id, h.agent_id, h.task_id, h.question, h.options, h.recommendation, h.material, h.status, h.chosen_option, h.answer, h.answered_by, h.created_at, h.answered_at, h.referential_key, h.recipient_type, h.recipient_id, h.escalated_at, h.escalation_note, h.answered_by_level, h.escalated_by_lead_id, h.status_before, h.trigger, h.answer_scope, i.number AS issue_number, i.title AS issue_title
 FROM raised_hand h
 JOIN issue i ON i.id = h.issue_id
 WHERE h.workspace_id = $1 AND h.status = 'open'
@@ -388,6 +494,8 @@ type ListOpenHandsInWorkspaceRow struct {
 	AnsweredByLevel   pgtype.Text        `json:"answered_by_level"`
 	EscalatedByLeadID pgtype.UUID        `json:"escalated_by_lead_id"`
 	StatusBefore      pgtype.Text        `json:"status_before"`
+	Trigger           pgtype.Text        `json:"trigger"`
+	AnswerScope       pgtype.Text        `json:"answer_scope"`
 	IssueNumber       int32              `json:"issue_number"`
 	IssueTitle        string             `json:"issue_title"`
 }
@@ -425,8 +533,61 @@ func (q *Queries) ListOpenHandsInWorkspace(ctx context.Context, workspaceID pgty
 			&i.AnsweredByLevel,
 			&i.EscalatedByLeadID,
 			&i.StatusBefore,
+			&i.Trigger,
+			&i.AnswerScope,
 			&i.IssueNumber,
 			&i.IssueTitle,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReferentialEntries = `-- name: ListReferentialEntries :many
+SELECT e.id, e.referential_key, e.statement, e.created_at,
+       h.question AS source_question
+FROM referential_entry e
+LEFT JOIN raised_hand h ON h.id = e.source_hand_id
+WHERE e.workspace_id = $1
+  AND ($2::text IS NULL OR e.referential_key = $2::text)
+ORDER BY e.created_at DESC
+`
+
+type ListReferentialEntriesParams struct {
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	ReferentialKey pgtype.Text `json:"referential_key"`
+}
+
+type ListReferentialEntriesRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	ReferentialKey string             `json:"referential_key"`
+	Statement      string             `json:"statement"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	SourceQuestion pgtype.Text        `json:"source_question"`
+}
+
+// A referential's accumulated rules, newest first, each with the question that
+// produced it.
+func (q *Queries) ListReferentialEntries(ctx context.Context, arg ListReferentialEntriesParams) ([]ListReferentialEntriesRow, error) {
+	rows, err := q.db.Query(ctx, listReferentialEntries, arg.WorkspaceID, arg.ReferentialKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListReferentialEntriesRow{}
+	for rows.Next() {
+		var i ListReferentialEntriesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ReferentialKey,
+			&i.Statement,
+			&i.CreatedAt,
+			&i.SourceQuestion,
 		); err != nil {
 			return nil, err
 		}
@@ -443,14 +604,15 @@ const raiseHand = `-- name: RaiseHand :one
 INSERT INTO raised_hand (
     workspace_id, issue_id, agent_id, task_id,
     question, options, recommendation, material, referential_key,
-    recipient_type, recipient_id, status_before
+    recipient_type, recipient_id, status_before, trigger
 ) VALUES (
     $1, $2, $3, $4,
     $5, $6, $7, $8,
     $9,
-    $10, $11, $12
+    $10, $11, $12,
+    $13
 )
-RETURNING id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at, referential_key, recipient_type, recipient_id, escalated_at, escalation_note, answered_by_level, escalated_by_lead_id, status_before
+RETURNING id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at, referential_key, recipient_type, recipient_id, escalated_at, escalation_note, answered_by_level, escalated_by_lead_id, status_before, trigger, answer_scope
 `
 
 type RaiseHandParams struct {
@@ -466,6 +628,7 @@ type RaiseHandParams struct {
 	RecipientType  string      `json:"recipient_type"`
 	RecipientID    pgtype.UUID `json:"recipient_id"`
 	StatusBefore   pgtype.Text `json:"status_before"`
+	Trigger        pgtype.Text `json:"trigger"`
 }
 
 // SPIKE (not upstream): queries for the raised hand.
@@ -484,6 +647,7 @@ func (q *Queries) RaiseHand(ctx context.Context, arg RaiseHandParams) (RaisedHan
 		arg.RecipientType,
 		arg.RecipientID,
 		arg.StatusBefore,
+		arg.Trigger,
 	)
 	var i RaisedHand
 	err := row.Scan(
@@ -510,6 +674,8 @@ func (q *Queries) RaiseHand(ctx context.Context, arg RaiseHandParams) (RaisedHan
 		&i.AnsweredByLevel,
 		&i.EscalatedByLeadID,
 		&i.StatusBefore,
+		&i.Trigger,
+		&i.AnswerScope,
 	)
 	return i, err
 }

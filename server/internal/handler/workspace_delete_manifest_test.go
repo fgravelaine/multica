@@ -120,8 +120,15 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	// SPIKE: level_policy. What a rung runs on, per workspace. Goes with the
 	// workspace on the workspace FK's CASCADE, like referential — it names no
 	// issue and no agent, so nothing else has to be torn down first.
-	"level_policy":                   workspaceDelete,
-	"referential":                    workspaceDelete,
+	"level_policy": workspaceDelete,
+	"referential":  workspaceDelete,
+	// SPIKE: referential_entry. What an answered hand wrote UP into the
+	// referential when its scope was `rule`. Goes with the workspace on the
+	// workspace FK's CASCADE. source_hand_id is ON DELETE SET NULL rather than
+	// CASCADE on purpose: a rule outlives the question that produced it, and a
+	// reference that empties itself when old hands are cleaned up is a
+	// reference that never accumulates anything.
+	"referential_entry":              workspaceDelete,
 	"runtime_profile":                workspaceDelete,
 	"schema_migrations":              workspaceDeleteKeep,
 	"seat_capacity_outbox":           workspaceDeleteSettle,

@@ -82,6 +82,13 @@ func runHandRaise(cmd *cobra.Command, args []string) error {
 		options = append(options, map[string]string{"key": key, "label": label, "cost": cost})
 	}
 
+	trigger, _ := cmd.Flags().GetString("trigger")
+	if strings.TrimSpace(trigger) == "" {
+		return fmt.Errorf("--trigger is required: one of block, three_failures, contradiction\n" +
+			"The set is closed on purpose. Without it the counters measure how tired an agent is\n" +
+			"rather than where the references are thin")
+	}
+
 	recommend, _ := cmd.Flags().GetString("recommend")
 	material, _ := cmd.Flags().GetString("material")
 	referential, _ := cmd.Flags().GetString("referential")
@@ -94,6 +101,7 @@ func runHandRaise(cmd *cobra.Command, args []string) error {
 		"question":    question,
 		"options":     options,
 		"referential": referential,
+		"trigger":     trigger,
 	}
 	if recommend != "" {
 		body["recommendation"] = recommend
@@ -214,6 +222,10 @@ func runHandAnswer(cmd *cobra.Command, args []string) error {
 	if note != "" {
 		body["answer"] = note
 	}
+	if rule, _ := cmd.Flags().GetString("rule"); strings.TrimSpace(rule) != "" {
+		body["scope"] = "rule"
+		body["rule"] = rule
+	}
 	if err := client.PostJSON(ctx, "/api/issues/"+args[0]+"/hands/answer", body, &hand); err != nil {
 		return fmt.Errorf("answer hand: %w", err)
 	}
@@ -269,6 +281,7 @@ func init() {
 	handRaiseCmd.Flags().String("question", "", "What is being asked, in one line (required)")
 	handRaiseCmd.Flags().StringArray("option", nil, "Repeatable: 'key|label|cost of being wrong' (at least two)")
 	handRaiseCmd.Flags().String("referential", "", "Which body of knowledge failed to answer (required; see `multica referential list`)")
+	handRaiseCmd.Flags().String("trigger", "", "Why the hand went up: block | three_failures | contradiction (required)")
 	handRaiseCmd.Flags().String("recommend", "", "Option key the raiser recommends")
 	handRaiseCmd.Flags().String("material", "", "Anything the decider needs to look at")
 	handRaiseCmd.Flags().String("output", "table", "Output format: table or json")
@@ -276,6 +289,7 @@ func init() {
 	handListCmd.Flags().String("output", "table", "Output format: table or json")
 
 	handAnswerCmd.Flags().String("note", "", "Anything to add beyond the chosen option")
+	handAnswerCmd.Flags().String("rule", "", "Make this answer a RULE and put this statement in the referential (default: a local choice binding only this unit)")
 	handAnswerCmd.Flags().String("output", "table", "Output format: table or json")
 
 	handCmd.AddCommand(handRaiseCmd)

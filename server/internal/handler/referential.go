@@ -54,3 +54,43 @@ func (h *Handler) ListReferentials(w http.ResponseWriter, r *http.Request) {
 	}
 	writeMeasuredJSON(w, http.StatusOK, map[string]any{"referentials": out})
 }
+
+// ReferentialLoopRow is one referential's half-loop: how many hands it could not
+// answer, and how many of those answers came back as rules.
+type ReferentialLoopRow struct {
+	Key          string `json:"key"`
+	Hands        int    `json:"hands"`
+	Rules        int    `json:"rules"`
+	LocalChoices int    `json:"local_choices"`
+	StillOpen    int    `json:"still_open"`
+}
+
+// GetReferentialLoop answers the question the diagnostic could only half ask.
+//
+// Counting hands per referential says which body of knowledge is too thin to
+// answer on its own. It does not say whether anything is being done about it.
+// Twelve hands and zero rules is a reference being asked the same kind of
+// question over and over and learning nothing from it — which looks identical,
+// in a count of hands alone, to a reference that is steadily improving.
+func (h *Handler) GetReferentialLoop(w http.ResponseWriter, r *http.Request) {
+	wsUUID, ok := parseUUIDOrBadRequest(w, h.resolveWorkspaceID(r), "workspace_id")
+	if !ok {
+		return
+	}
+	rows, err := h.Queries.CountReferentialLoop(r.Context(), wsUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read the referential loop")
+		return
+	}
+	out := make([]ReferentialLoopRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, ReferentialLoopRow{
+			Key:          row.ReferentialKey.String,
+			Hands:        int(row.Hands),
+			Rules:        int(row.Rules),
+			LocalChoices: int(row.LocalChoices),
+			StillOpen:    int(row.StillOpen),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"referentials": out})
+}
