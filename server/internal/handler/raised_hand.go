@@ -82,30 +82,25 @@ var answerScopes = []string{"rule", "local"}
 
 const parkedStatus = issuestatus.Backlog
 
-// resumeStatus is where answering puts a unit back when nothing better is
-// recorded. backlog → todo is the transition the product already re-triggers
-// on, so the resume is not written here; it is WillEnqueueRun doing what it
-// already does.
+// resumeStatus is the FALLBACK only: where answering puts a unit back when no
+// previous status was recorded, which is any hand raised before migration 486.
+// It is not the rule, and an earlier version of this comment read it as one.
 //
-// THE THIRD WALL, and it is in the resume rather than the park.
+// The rule is WillEnqueueRun, which re-fires on `backlog -> anything active`
+// (service/issue_trigger.go) — not on `backlog -> todo`. So restoring the exact
+// state the unit held AND re-dispatching are not in conflict: park to backlog,
+// restore status_before, and the product's own promotion rule does the rest.
+// That is Galactics' "resumes at the beat it stopped at", and it cost nothing.
 //
-// Galactics' raised-hand spec says a unit "resumes at the beat it stopped at.
-// Not at T1." Multica couples resuming the RUN to one specific transition:
-// backlog → todo, and nothing else. So a hand cannot both restore the previous
-// state and re-fire the run — the two are the same write, and it can only have
-// one value.
+// WHAT IS ACTUALLY MISSING, and it is the opposite shape: the resume ALWAYS
+// re-fires. There is no way to say "restore this state and do not re-dispatch".
+// A hand raised while the unit sat at in_review was waiting on a REVIEWER, and
+// answering it re-runs the agent — which is not the beat it stopped at.
+// Measured: issue in in_review, hand raised and answered, status restored to
+// in_review and the queue went 0 -> 1.
 //
-// What is done about it, and why it is not a fudge: restore status_before, and
-// let the run re-fire only when that restoration happens to be backlog → todo.
-// This is correct rather than merely convenient. A hand raised while the unit
-// was in_review was waiting on a REVIEWER; returning it to in_review and firing
-// no run resumes exactly the beat it stopped at. A hand raised mid-run returns
-// to todo and the run re-fires. The two cases want different things and the
-// recorded status is what tells them apart.
-//
-// What stays broken: a unit parked from a status that is neither todo nor a
-// review state resumes without its run. Nothing in the product can express
-// "restore this status AND re-dispatch" in one write.
+// The fix is one recorded bit on the hand — whether the parked state was an
+// agent's or a reviewer's — not a change to the product. Not built.
 const resumeStatus = issuestatus.Todo
 
 // RaiseHand records a raised hand and parks its issue.

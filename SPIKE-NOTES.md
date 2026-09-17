@@ -648,19 +648,51 @@ maximum":
 3. a field the payload fits in — built, with the costs.
 4. a resume — built.
 
-## 17. The third wall: resume is coupled to one transition
+## 17. The third wall, retracted — and the smaller one behind it
 
-Galactics: *"the unit resumes at the beat it stopped at. Not at T1."*
+**This section claimed a wall that does not exist. Retracted, with the reason,
+because the wrong version was load-bearing for two later sections.**
 
-Multica re-fires a run on exactly one transition, `backlog → todo`. So restoring
-the previous state and resuming the run are the SAME WRITE and it can only have
-one value. A unit cannot both go back to where it was and be picked up again.
+What it said: Multica re-fires a run on exactly one transition, `backlog →
+todo`, so restoring the previous state and resuming the run are the same write
+and cannot both be had.
 
-Not a fudge in the resolution, because the two cases want different things: a
-hand raised at `in_review` was waiting on a reviewer, so returning it there and
-firing no run *is* the beat it stopped at. What stays broken is a unit parked
-from any other non-`todo` status — it resumes without its run, and nothing in
-the product can express "restore this status AND re-dispatch".
+What `WillEnqueueRun` actually does (`service/issue_trigger.go:122`):
+
+```go
+case in.StatusChanged && prevStatus == "backlog" &&
+     currentStatus != "backlog" &&
+     currentStatus != "done" && currentStatus != "cancelled":
+```
+
+**`backlog → anything active`, not `backlog → todo`.** The comment two lines
+above it even says so: *"Only the fixed backlog key parks work. Leaving it for
+another unstarted or started status can enqueue a run."* I read the constant and
+not the predicate.
+
+So the resume works exactly as Galactics asks. Parked from `in_review`, the unit
+comes back to `in_review`; parked from `in_progress`, back to `in_progress`.
+Measured: hand raised on an issue sitting in `in_review` with an agent
+assignee, answered, issue returned to `in_review` **and** the queue went 0 → 1.
+
+### The smaller wall behind it
+
+The retraction exposes a real one, and it is the opposite shape.
+
+The resume **always** re-fires. There is no way to say "restore this state and
+do NOT re-dispatch". A hand raised while the unit was at `in_review` was waiting
+on a REVIEWER — and answering it re-runs the agent, which is not the beat it
+stopped at. The old section had this case backwards: it claimed the product
+fires no run there and called that correct. It fires one.
+
+That is cheaper to fix than the wall I invented — one recorded bit on the hand,
+`resume_dispatches`, set from whether the parked state was an agent's or a
+reviewer's. Not built.
+
+**Why the error is worth keeping on the page.** Both wrong claims came from
+reading `const resumeStatus = issuestatus.Todo` and generalising from it,
+instead of reading the predicate that consumes it. The constant is a FALLBACK
+for hands raised before `status_before` existed. It was never the rule.
 
 ## 18. The trigger set is closed, and this spike has no trigger at all
 
