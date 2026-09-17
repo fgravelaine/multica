@@ -162,6 +162,22 @@ func (q *Queries) CountIssuesByLevel(ctx context.Context, arg CountIssuesByLevel
 	return items, nil
 }
 
+const deleteLevelGate = `-- name: DeleteLevelGate :exec
+DELETE FROM level_gate
+WHERE workspace_id = $1 AND level = $2 AND position = $3
+`
+
+type DeleteLevelGateParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Level       string      `json:"level"`
+	Position    int32       `json:"position"`
+}
+
+func (q *Queries) DeleteLevelGate(ctx context.Context, arg DeleteLevelGateParams) error {
+	_, err := q.db.Exec(ctx, deleteLevelGate, arg.WorkspaceID, arg.Level, arg.Position)
+	return err
+}
+
 const deleteLevelPolicy = `-- name: DeleteLevelPolicy :exec
 DELETE FROM level_policy WHERE workspace_id = $1 AND level = $2
 `
@@ -212,6 +228,41 @@ func (q *Queries) GetMissionCampaign(ctx context.Context, issueID pgtype.UUID) (
 		&i.Status,
 	)
 	return i, err
+}
+
+const listAllLevelGates = `-- name: ListAllLevelGates :many
+SELECT id, workspace_id, level, position, status_key, ratifier_type, ratifier_id, created_at FROM level_gate
+WHERE workspace_id = $1
+ORDER BY level, position
+`
+
+func (q *Queries) ListAllLevelGates(ctx context.Context, workspaceID pgtype.UUID) ([]LevelGate, error) {
+	rows, err := q.db.Query(ctx, listAllLevelGates, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LevelGate{}
+	for rows.Next() {
+		var i LevelGate
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Level,
+			&i.Position,
+			&i.StatusKey,
+			&i.RatifierType,
+			&i.RatifierID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listIssuesAtLevel = `-- name: ListIssuesAtLevel :many
@@ -329,6 +380,47 @@ func (q *Queries) ListIssuesAtLevel(ctx context.Context, arg ListIssuesAtLevelPa
 			&i.CampaignTitle,
 			&i.ParentNumber,
 			&i.ParentTitle,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLevelGates = `-- name: ListLevelGates :many
+SELECT id, workspace_id, level, position, status_key, ratifier_type, ratifier_id, created_at FROM level_gate
+WHERE workspace_id = $1 AND level = $2
+ORDER BY position
+`
+
+type ListLevelGatesParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Level       string      `json:"level"`
+}
+
+// SPIKE: the gates a rung declares, in the order they are walked.
+func (q *Queries) ListLevelGates(ctx context.Context, arg ListLevelGatesParams) ([]LevelGate, error) {
+	rows, err := q.db.Query(ctx, listLevelGates, arg.WorkspaceID, arg.Level)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LevelGate{}
+	for rows.Next() {
+		var i LevelGate
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Level,
+			&i.Position,
+			&i.StatusKey,
+			&i.RatifierType,
+			&i.RatifierID,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -995,6 +1087,48 @@ type RemoveIssueDependencyParams struct {
 func (q *Queries) RemoveIssueDependency(ctx context.Context, arg RemoveIssueDependencyParams) error {
 	_, err := q.db.Exec(ctx, removeIssueDependency, arg.IssueID, arg.DependsOnIssueID)
 	return err
+}
+
+const setLevelGate = `-- name: SetLevelGate :one
+INSERT INTO level_gate (workspace_id, level, position, status_key, ratifier_type, ratifier_id)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (workspace_id, level, position) DO UPDATE
+SET status_key    = EXCLUDED.status_key,
+    ratifier_type = EXCLUDED.ratifier_type,
+    ratifier_id   = EXCLUDED.ratifier_id
+RETURNING id, workspace_id, level, position, status_key, ratifier_type, ratifier_id, created_at
+`
+
+type SetLevelGateParams struct {
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	Level        string      `json:"level"`
+	Position     int32       `json:"position"`
+	StatusKey    string      `json:"status_key"`
+	RatifierType string      `json:"ratifier_type"`
+	RatifierID   pgtype.UUID `json:"ratifier_id"`
+}
+
+func (q *Queries) SetLevelGate(ctx context.Context, arg SetLevelGateParams) (LevelGate, error) {
+	row := q.db.QueryRow(ctx, setLevelGate,
+		arg.WorkspaceID,
+		arg.Level,
+		arg.Position,
+		arg.StatusKey,
+		arg.RatifierType,
+		arg.RatifierID,
+	)
+	var i LevelGate
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Level,
+		&i.Position,
+		&i.StatusKey,
+		&i.RatifierType,
+		&i.RatifierID,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const upsertLevelPolicy = `-- name: UpsertLevelPolicy :one

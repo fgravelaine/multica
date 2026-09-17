@@ -89,6 +89,7 @@ func init() {
 	rootCmd.AddCommand(levelCmd)
 	rootCmd.AddCommand(waitsOnCmd)
 	rootCmd.AddCommand(levelPolicyCmd)
+	rootCmd.AddCommand(levelGateCmd)
 	rootCmd.AddCommand(chatCmd)
 	rootCmd.AddCommand(daemonCmd)
 	rootCmd.AddCommand(runtimeCmd)

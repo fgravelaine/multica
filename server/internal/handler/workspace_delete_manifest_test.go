@@ -120,6 +120,13 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	// SPIKE: level_policy. What a rung runs on, per workspace. Goes with the
 	// workspace on the workspace FK's CASCADE, like referential — it names no
 	// issue and no agent, so nothing else has to be torn down first.
+	// SPIKE: level_gate. What a rung must pass through, and who ratifies it.
+	// Goes with the workspace on the workspace FK's CASCADE, like level_policy.
+	// status_key is TEXT rather than an FK to issue_status on purpose (see
+	// migration 488): an FK would cascade a gate away when a status is
+	// archived, and a rung that silently stops refusing things is the
+	// dangerous direction.
+	"level_gate":   workspaceDelete,
 	"level_policy": workspaceDelete,
 	"referential":  workspaceDelete,
 	// SPIKE: referential_entry. What an answered hand wrote UP into the

@@ -69,8 +69,24 @@ const (
 	// waitingBlocked: the issue is in `blocked`. The product's own word; what
 	// blocks it is not recorded anywhere, so the view does not guess.
 	waitingBlocked missionWaitingReason = "blocked"
-	// waitingReview: the issue is in `in_review`. Waiting on a reviewer is what
-	// the status means.
+	// waitingReview: the issue is standing at a gate. `in_review` always counts
+	// — waiting on a reviewer is what that status means — and so does any status
+	// a rung declares as a gate.
+	//
+	// The second half is not decoration, and the reason is sharper than it
+	// looks. A custom status does NOT inherit review behaviour:
+	// issuestatus.customBehavior maps only the terminal categories, and returns
+	// the key itself for everything else — "Custom statuses inherit only
+	// terminal lifecycle semantics, not parked, review, blocked or active-agent
+	// recovery behavior." So Effective("qa") is "qa", which matches neither
+	// Blocked nor InReview below, falls to `default`, and the unit rendered as
+	// WAITING ON NOBODY.
+	//
+	// That is by design upstream rather than an oversight — a custom status is
+	// not allowed to silently acquire in_review's meaning. It does mean a review
+	// gate has to be DECLARED to be seen, which is what this set is.
+	// Galactics' own flow is `in review -> qa -> done`, so that is not a
+	// hypothetical workspace.
 	waitingReview missionWaitingReason = "in_review"
 	// waitingRunFailed: the most recent run ended in failure and nothing has
 	// re-run since. The failure_reason travels with it.
@@ -723,6 +739,20 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 		changeByIssue[uuidToString(c.IssueID)] = statusChange{at: c.CreatedAt.Time.UTC(), to: to}
 	}
 
+	// Every status any rung gates on, as one set. ONE query for the whole board
+	// rather than a lookup per node — the set is tiny and the same for every row.
+	//
+	// A failure here is not fatal: the board falls back to the pre-gate
+	// behaviour, which is a unit at a custom gate status rendering as not
+	// waiting. Wrong, but a board that renders is better than one that 500s
+	// because a gate table could not be read.
+	gateStatuses := make(map[string]struct{})
+	if allGates, gerr := h.Queries.ListAllLevelGates(r.Context(), root.WorkspaceID); gerr == nil {
+		for _, gate := range allGates {
+			gateStatuses[gate.StatusKey] = struct{}{}
+		}
+	}
+
 	nodes := make([]MissionNode, 0, len(rows))
 	nodeIndex := make(map[string]int, len(rows))
 	waiting := make([]MissionWaitingUnit, 0)
@@ -783,7 +813,7 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 		// is listing every backlog child of a staged mission, most of which are
 		// waiting their turn exactly as designed, and the list stops being the
 		// thing you open first.
-		if unit, parked := missionWaitingUnit(node, effective, handsByIssue[id], tasksByIssue[id], changeByIssue[id], row.UpdatedAt.Time.UTC(), now); parked {
+		if unit, parked := missionWaitingUnit(node, effective, gateStatuses, handsByIssue[id], tasksByIssue[id], changeByIssue[id], row.UpdatedAt.Time.UTC(), now); parked {
 			waiting = append(waiting, unit)
 		}
 	}
@@ -935,9 +965,23 @@ func (h *Handler) GetMission(w http.ResponseWriter, r *http.Request) {
 // its own start time, so it wins over anything derived from a status. A failed
 // run is checked last because an issue can be in_review AND have a failed run,
 // and the review is the thing a human is actually holding.
+// isGateStatus answers whether a unit standing on this status is standing at a
+// declared gate. Nil-safe: a workspace with no gates behaves exactly as before.
+func isGateStatus(gateStatuses map[string]struct{}, status string) bool {
+	if len(gateStatuses) == 0 {
+		return false
+	}
+	_, ok := gateStatuses[status]
+	return ok
+}
+
 func missionWaitingUnit(
 	node MissionNode,
 	effective string,
+	// gateStatuses is every status any rung in this workspace gates on. Keyed on
+	// the RAW status key, which for a custom status is also what Effective
+	// returns — custom statuses inherit terminal semantics only, never review.
+	gateStatuses map[string]struct{},
 	hand MissionHand,
 	task db.ListMissionLatestTasksRow,
 	change struct {
@@ -969,7 +1013,7 @@ func missionWaitingUnit(
 		handCopy := hand
 		unit.Hand = &handCopy
 
-	case effective == issuestatus.Blocked, effective == issuestatus.InReview:
+	case effective == issuestatus.Blocked, effective == issuestatus.InReview, isGateStatus(gateStatuses, node.Status):
 		if effective == issuestatus.Blocked {
 			unit.Reason = waitingBlocked
 		} else {
@@ -1703,6 +1747,32 @@ func (h *Handler) ListIssueDependencies(w http.ResponseWriter, r *http.Request) 
 // The agent's own settings are the fallback, not the winner. That is the point:
 // "put it at the level" means the level decides, and an agent's model becomes
 // what runs when its rung has no opinion.
+// resolveIssueLevel answers which rung an issue is on: the declared one if it
+// has one, otherwise the one its depth implies.
+//
+// ONE implementation, deliberately. "Declared beats depth" is the rule that
+// makes an orphan expressible at all (§10), and it is now read by two callers
+// that must never disagree — what a rung RUNS ON (applyLevelPolicy) and what a
+// rung must PASS THROUGH (the gates). Two copies of this walk would drift, and
+// the failure would be a unit whose gates come from one rung while its model
+// comes from another.
+//
+// Returns false when the depth walk fails. Every caller treats that as "no
+// opinion" rather than as a refusal: a lookup failure must not strand work.
+func (h *Handler) resolveIssueLevel(ctx context.Context, issue db.Issue) (string, bool) {
+	if issue.Level.Valid && issue.Level.String != "" {
+		return issue.Level.String, true
+	}
+	depth, err := h.Queries.CountIssueAncestors(ctx, db.CountIssueAncestorsParams{
+		IssueID:  issue.ID,
+		MaxDepth: int32(missionBoardDepth),
+	})
+	if err != nil {
+		return "", false
+	}
+	return missionLevel(depth), true
+}
+
 func (h *Handler) applyLevelPolicy(ctx context.Context, agentData *TaskAgentData, issue db.Issue) {
 	if agentData == nil {
 		return
@@ -1715,18 +1785,9 @@ func (h *Handler) applyLevelPolicy(ctx context.Context, agentData *TaskAgentData
 		return
 	}
 
-	level := issue.Level.String
-	if !issue.Level.Valid || level == "" {
-		// Undeclared: the rung comes from depth, which needs the walk up. Only
-		// reached when the workspace actually has policies.
-		depth, err := h.Queries.CountIssueAncestors(ctx, db.CountIssueAncestorsParams{
-			IssueID:  issue.ID,
-			MaxDepth: int32(missionBoardDepth),
-		})
-		if err != nil {
-			return
-		}
-		level = missionLevel(depth)
+	level, ok := h.resolveIssueLevel(ctx, issue)
+	if !ok {
+		return
 	}
 
 	for _, policy := range policies {

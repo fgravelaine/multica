@@ -2021,6 +2021,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Get("/api/referentials/loop", h.GetReferentialLoop)
 			r.Get("/api/level-policies", h.ListLevelPolicies)
 			r.Put("/api/level-policies/{level}", h.SetLevelPolicy)
+			r.Get("/api/level-gates", h.ListLevelGates)
+			r.Put("/api/level-gates/{level}", h.SetLevelGate)
 
 			// Projects
 			r.Route("/api/projects", func(r chi.Router) {

@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -239,6 +240,112 @@ func contains(values []string, want string) bool {
 	return false
 }
 
+var levelGateCmd = &cobra.Command{
+	Use:   "level-gate [rung] [position]",
+	Short: "What must say yes before a rung's work can move on",
+	Long: "A rung declares what has the right to say NO, and who accepts the\n" +
+		"return. `in_review` was the near miss: the whole product respects it —\n" +
+		"agents park finished work there, notifications treat it as the thing\n" +
+		"that needs you now — but nothing validates a transition anywhere in\n" +
+		"Multica. `in_review` to `done` is unguarded, by anyone. It is a place\n" +
+		"that holds a unit, not a gate that can refuse to release it.\n\n" +
+		"Gates are ORDERED and walked one at a time. Two reviewers queue; they\n" +
+		"do not both hold the unit. Gate 2 is reachable only from gate 1, and a\n" +
+		"done status only from the last gate.\n\n" +
+		"Three things are always allowed, because a gate that traps a unit is\n" +
+		"worse than no gate: moving BACKWARDS, dropping to an earlier gate, and\n" +
+		"cancelling. Only forward progress is ratified.\n\n" +
+		"--ratifier is `human` (any member) or `agent` with --agent <id> (one\n" +
+		"named agent, so the agent that did the work cannot accept its own\n" +
+		"return).\n\n" +
+		"Pass no rung to list every gate. Pass a rung and a position with no\n" +
+		"--status to clear that gate.\n\n" +
+		"Examples:\n" +
+		"  multica level-gate\n" +
+		"  multica level-gate objective 1 --status qa --ratifier agent --agent <id>\n" +
+		"  multica level-gate objective 2 --status in_review\n" +
+		"  multica level-gate objective 2",
+	Args: cobra.MaximumNArgs(2),
+	RunE: runLevelGate,
+}
+
+func runLevelGate(cmd *cobra.Command, args []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+
+	if len(args) == 0 {
+		var resp struct {
+			Gates []map[string]any `json:"gates"`
+		}
+		if err := client.GetJSON(ctx, "/api/level-gates", &resp); err != nil {
+			return fmt.Errorf("list level gates: %w", err)
+		}
+		if output, _ := cmd.Flags().GetString("output"); output == "json" {
+			return cli.PrintJSON(os.Stdout, resp.Gates)
+		}
+		if len(resp.Gates) == 0 {
+			fmt.Fprintln(os.Stderr, "No rung gates anything. Every status moves to every other status.")
+			return nil
+		}
+		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(w, "RUNG\t#\tSTATUS\tRATIFIED BY")
+		for _, g := range resp.Gates {
+			ratifier := strVal(g, "ratifier_type")
+			if id := strVal(g, "ratifier_id"); id != "" {
+				ratifier = ratifier + " " + id
+			}
+			fmt.Fprintf(w, "%s\t%v\t%s\t%s\n",
+				strVal(g, "level"), g["position"], strVal(g, "status_key"), ratifier)
+		}
+		return w.Flush()
+	}
+
+	rung := strings.ToLower(strings.TrimSpace(args[0]))
+	if !contains(ladderRungs, rung) {
+		return fmt.Errorf("unknown rung %q: one of %s", rung, strings.Join(ladderRungs, ", "))
+	}
+	if len(args) < 2 {
+		return fmt.Errorf("a position is required: the order this gate is walked in, starting at 1")
+	}
+	position, err := strconv.Atoi(strings.TrimSpace(args[1]))
+	if err != nil || position < 1 {
+		return fmt.Errorf("position must be a whole number, 1 or more — it is the order the gates are walked in")
+	}
+
+	status, _ := cmd.Flags().GetString("status")
+	ratifier, _ := cmd.Flags().GetString("ratifier")
+	agentID, _ := cmd.Flags().GetString("agent")
+
+	body := map[string]any{"position": position, "status_key": status}
+	if status != "" {
+		if ratifier == "" {
+			ratifier = "human"
+		}
+		body["ratifier_type"] = ratifier
+		if agentID != "" {
+			body["ratifier_id"] = agentID
+		}
+	}
+
+	var resp map[string]any
+	if err := client.PutJSON(ctx, "/api/level-gates/"+rung, body, &resp); err != nil {
+		return fmt.Errorf("set level gate: %w", err)
+	}
+	if output, _ := cmd.Flags().GetString("output"); output == "json" {
+		return cli.PrintJSON(os.Stdout, resp)
+	}
+	if status == "" {
+		fmt.Printf("Gate %d cleared on %s.\n", position, rung)
+		return nil
+	}
+	fmt.Printf("%s gate %d: %s, ratified by %s.\n", rung, position, status, ratifier)
+	return nil
+}
+
 func init() {
 	waitsOnCmd.Flags().Bool("remove", false, "Drop the wait instead of declaring it")
 
@@ -246,4 +353,9 @@ func init() {
 	levelPolicyCmd.Flags().String("thinking", "", "Thinking level this rung runs on")
 	levelPolicyCmd.Flags().String("tier", "", "Service tier this rung runs on")
 	levelPolicyCmd.Flags().String("output", "table", "Output format: table or json")
+
+	levelGateCmd.Flags().String("status", "", "Status a unit sits in while this gate holds it (empty clears the gate)")
+	levelGateCmd.Flags().String("ratifier", "", "Who accepts the return: human | agent (default human)")
+	levelGateCmd.Flags().String("agent", "", "Agent id, required when --ratifier agent")
+	levelGateCmd.Flags().String("output", "table", "Output format: table or json")
 }

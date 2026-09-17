@@ -124,7 +124,7 @@ func TestMissionWaitingUnit_TerminalIsNeverWaiting(t *testing.T) {
 		Status:      "failed",
 		CompletedAt: pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},
 	}
-	if _, parked := missionWaitingUnit(n, "done", MissionHand{}, task, changeStub{}, time.Now(), time.Now()); parked {
+	if _, parked := missionWaitingUnit(n, "done", nil, MissionHand{}, task, changeStub{}, time.Now(), time.Now()); parked {
 		t.Error("a terminal unit must never appear in the waiting list")
 	}
 }
@@ -138,7 +138,7 @@ func TestMissionWaitingUnit_HandBeatsStatus(t *testing.T) {
 	hand := MissionHand{ID: "h1", Question: "which card?", CreatedAt: raised}
 	change := changeStub{at: now.Add(-30 * time.Minute), to: "in_review"}
 
-	unit, parked := missionWaitingUnit(n, "in_review", hand, db.ListMissionLatestTasksRow{}, change, now, now)
+	unit, parked := missionWaitingUnit(n, "in_review", nil, hand, db.ListMissionLatestTasksRow{}, change, now, now)
 	if !parked {
 		t.Fatal("expected the unit to be parked")
 	}
@@ -162,7 +162,7 @@ func TestMissionWaitingUnit_StaleStatusChangeIsFlaggedNotTrusted(t *testing.T) {
 	change := changeStub{at: now.Add(-10 * time.Hour), to: "todo"}
 	updated := now.Add(-15 * time.Minute)
 
-	unit, parked := missionWaitingUnit(n, "blocked", MissionHand{}, db.ListMissionLatestTasksRow{}, change, updated, now)
+	unit, parked := missionWaitingUnit(n, "blocked", nil, MissionHand{}, db.ListMissionLatestTasksRow{}, change, updated, now)
 	if !parked {
 		t.Fatal("expected the unit to be parked")
 	}
@@ -179,7 +179,7 @@ func TestMissionWaitingUnit_NothingToSayIsNotWaiting(t *testing.T) {
 	// working as designed — it is waiting its turn, not waiting on a human.
 	// Including it is what would flood the list.
 	n := MissionNode{ID: "x", Status: "backlog"}
-	if _, parked := missionWaitingUnit(n, "backlog", MissionHand{}, db.ListMissionLatestTasksRow{}, changeStub{}, time.Now(), time.Now()); parked {
+	if _, parked := missionWaitingUnit(n, "backlog", nil, MissionHand{}, db.ListMissionLatestTasksRow{}, changeStub{}, time.Now(), time.Now()); parked {
 		t.Error("a plain backlog child must not appear in the waiting list")
 	}
 }

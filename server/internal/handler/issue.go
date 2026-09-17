@@ -3431,6 +3431,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := requestUserID(r)
 	workspaceID := uuidToString(prevIssue.WorkspaceID)
+	// Resolved early only when this request touches status (the gate needs it);
+	// otherwise filled in below as before.
+	var gateActorType, gateActorID string
 
 	// Read body as raw bytes so we can detect which fields were explicitly sent.
 	bodyBytes, err := io.ReadAll(r.Body)
@@ -3493,6 +3496,19 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if req.Status != nil {
 		statusKey, _, ok := h.resolveIssueStatusKeyKind(w, r, prevIssue.WorkspaceID, *req.Status)
 		if !ok {
+			return
+		}
+		// SPIKE: the rung's gates. The first thing in this spike that refuses a
+		// write, so it happens HERE — before any field is applied and before the
+		// transaction opens. A refusal that lands mid-write would leave the
+		// issue's other fields updated and its status not, which is a worse
+		// state than either outcome.
+		//
+		// The actor is resolved once and reused below; resolveActor costs up to
+		// three queries and this path is hot.
+		gateActorType, gateActorID = h.resolveActor(r, userID, workspaceID)
+		if refusal := h.checkLevelGate(r.Context(), prevIssue, statusKey, gateActorType, gateActorID); refusal != "" {
+			writeLevelGateRefusal(w, refusal)
 			return
 		}
 		statusKeyForGuard = statusKey
@@ -3686,7 +3702,11 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Determine actor identity: agent (via X-Agent-ID header) or member.
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	// Already resolved above when this request set a status, for the gate check.
+	actorType, actorID := gateActorType, gateActorID
+	if actorType == "" {
+		actorType, actorID = h.resolveActor(r, userID, workspaceID)
+	}
 
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 	resp := issueToResponse(issue, prefix)
@@ -4231,6 +4251,11 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updated := 0
+	// SPIKE: gate refusals, collected so a skipped issue comes back with its
+	// reason. Resolved once for the batch — the actor is the same for every
+	// issue in it, and resolveActor costs up to three queries.
+	var gateRefusals []map[string]string
+	batchActorType, batchActorID := h.resolveActor(r, userID, workspaceID)
 	// One Resolver for the whole batch — a per-issue filler would query the
 	// catalog once per custom-status row. (MUL-6243)
 	fillBatch := h.newStatusCategoryFiller(r.Context(), wsUUID)
@@ -4269,6 +4294,23 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			params.Description = pgtype.Text{String: *req.Updates.Description, Valid: true}
 		}
 		if req.Updates.Status != nil {
+			// SPIKE: the rung's gates, per issue. A batch spans rungs, so the
+			// walk has to be evaluated for each one rather than once for the
+			// request.
+			//
+			// This loop's convention on a per-issue problem is `continue` — it
+			// skips and the count comes back lower. That is wrong for a
+			// refusal: "move these ten to done" returning `updated: 7` with no
+			// reason is exactly the silent-degradation shape §"What was NOT
+			// done" already complains about elsewhere. The skip is kept, and
+			// the reason is carried out in the response.
+			if refusal := h.checkLevelGate(r.Context(), prevIssue, batchStatusKey, batchActorType, batchActorID); refusal != "" {
+				gateRefusals = append(gateRefusals, map[string]string{
+					"issue_id": uuidToString(prevIssue.ID),
+					"reason":   refusal,
+				})
+				continue
+			}
 			params.Status = pgtype.Text{String: batchStatusKey, Valid: true}
 		}
 		if req.Updates.Priority != nil {
@@ -4491,8 +4533,15 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 	// batch. Single-issue UpdateIssue is unchanged and still notifies inline.
 	h.notifyParentsOfBatchChildDone(r.Context(), childDoneCompleted)
 
-	slog.Info("batch update issues", append(logger.RequestAttrs(r), "count", updated)...)
-	writeJSON(w, http.StatusOK, map[string]any{"updated": updated})
+	slog.Info("batch update issues", append(logger.RequestAttrs(r), "count", updated,
+		"gate_refusals", len(gateRefusals))...)
+	body := map[string]any{"updated": updated}
+	if len(gateRefusals) > 0 {
+		// Only present when something was refused, so a client that never
+		// declares a gate sees the response it always saw.
+		body["refused"] = gateRefusals
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 type BatchDeleteIssuesRequest struct {

@@ -448,3 +448,27 @@ RETURNING *;
 
 -- name: DeleteLevelPolicy :exec
 DELETE FROM level_policy WHERE workspace_id = @workspace_id AND level = @level;
+
+-- SPIKE: the gates a rung declares, in the order they are walked.
+-- name: ListLevelGates :many
+SELECT * FROM level_gate
+WHERE workspace_id = @workspace_id AND level = @level
+ORDER BY position;
+
+-- name: ListAllLevelGates :many
+SELECT * FROM level_gate
+WHERE workspace_id = @workspace_id
+ORDER BY level, position;
+
+-- name: SetLevelGate :one
+INSERT INTO level_gate (workspace_id, level, position, status_key, ratifier_type, ratifier_id)
+VALUES (@workspace_id, @level, @position, @status_key, @ratifier_type, sqlc.narg('ratifier_id'))
+ON CONFLICT (workspace_id, level, position) DO UPDATE
+SET status_key    = EXCLUDED.status_key,
+    ratifier_type = EXCLUDED.ratifier_type,
+    ratifier_id   = EXCLUDED.ratifier_id
+RETURNING *;
+
+-- name: DeleteLevelGate :exec
+DELETE FROM level_gate
+WHERE workspace_id = @workspace_id AND level = @level AND position = @position;

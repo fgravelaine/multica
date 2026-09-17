@@ -779,13 +779,131 @@ writes the statement and the count moves 8/0 → 8/1. An answer without it moves
 LOCAL and writes nothing up. Both units came back to `todo` — the state they
 were in, which is §"migration 486" doing its job.
 
+## 22. The gate, and the near miss that was already there
+
+I said nothing in Multica had a gate's shape. That was too strong, and the
+correction is the finding.
+
+**Two things already had most of it.** `in_review` is a pause the whole product
+respects — agents park finished work there, the notification listeners treat it
+as the dominant "this needs you now", the runtime sweeper deliberately refuses to
+reset it. And `raised_hand` is a working gate already: it parks a unit, names a
+recipient, and the unit cannot resume until someone answers.
+
+What was actually missing is narrower:
+
+| | `in_review` | `raised_hand` | `level_gate` |
+|---|---|---|---|
+| parks the unit | yes | yes | yes |
+| names who decides | no | yes | yes |
+| declared per rung | no | no | yes |
+| runs a check | no | no | **no** |
+
+**Nothing validates a transition anywhere in Multica.** `resolveIssueStatusKey`
+checks that a status key is in the workspace catalog and is not archived, and
+that is the whole of it. `in_review` → `done` is unguarded, by anyone. So
+`in_review` is a place that holds a unit, not a gate that can refuse to release
+one.
+
+### Ordered, and why not parallel
+
+Two reviewers on one unit either queue or both hold it. Galactics already runs
+the queued form — its own state flow is `in review → qa → done`, where "in review
+puts the change proposal in front of a reviewer, qa puts the acceptance criteria
+in front of AP-5". Parallel k-of-n ratification has no worked example on either
+side, and a tally nobody has exercised is a guess about how a team reviews.
+
+**And levels.md is already plural without saying so.** It gives a level ONE gate
+cell and ONE ratifier cell, but its own table breaks that: N3's gate reads "AP-5
+against the criteria, `gate-pr`" — two checks — and N4's ratifier reads "the
+gate, then the merge" — a sequence. Multiple gates are not a deviation from
+Galactics. They are its undeclared practice.
+
+### The four rules
+
+1. **No skipping forward.** Gate k is reachable only from gate k-1, and a `done`
+   status only from the last gate. Without this the gates are decoration.
+2. **Only the ratifier releases a gate forward.** This is "who accepts the
+   return", and it is what makes rule 1 mean anything — an ordered path anyone
+   may walk is a longer path, not a gate.
+3. **Backwards is always open.** The rule most likely to be argued with.
+   Galactics has AP-5 move a failing issue out to `in_progress`, which reads as
+   "rejection is the ratifier's too". Not enforced, because the cost is
+   asymmetric: a privileged rejection means a unit sits until exactly one actor
+   appears, with no escape and no way for the author to withdraw. A redo is
+   cheap; being unable to move at all is not.
+4. **A closed status is always reachable.** Cancelling is never gated. `done` is
+   NOT exempt — done is the thing being ratified.
+
+`human` tests the KIND of actor, `agent` tests IDENTITY. Any-agent would let the
+agent that did the work accept its own return.
+
+### `lead` is deliberately absent
+
+`raised_hand` resolves a lead relative to the agent that raised the hand. A gate
+has no raiser. Making `lead` mean "the assignee's lead" is a different
+definition, and inventing one to fill a column is how a vocabulary drifts. One
+CHECK change away when somebody says what it should mean.
+
+### A defect this found in what was already built
+
+The mission view keyed `waitingReview` on the literal `in_review`. **A custom
+status does not inherit review behaviour** — `customBehavior` maps only the
+terminal categories and returns the key itself for the rest, so
+`Effective("qa")` is `"qa"`, which matches neither `Blocked` nor `InReview`. A
+unit parked at a custom `qa` fell through to the default and rendered as
+**waiting on nobody**. Galactics' own flow is `in review → qa → done`, so that
+is not a hypothetical workspace. The board now reads the declared gate statuses.
+
+That inheritance rule is deliberate upstream, not an oversight: *"Custom statuses
+inherit only terminal lifecycle semantics, not parked, review, blocked or
+active-agent recovery behavior."* A custom status may not silently acquire
+`in_review`'s meaning. The consequence is that **a review gate has to be declared
+to be seen** — which is what `level_gate` now is.
+
+### Measured end to end
+
+Seven transitions against the live stack, on an `objective` with `qa` at gate 1
+and `in_review` at gate 2:
+
+```
+todo       -> done        REFUSED  has not passed qa
+todo       -> in_review   REFUSED  gates qa before in_review
+todo       -> qa          ok       entering gate 1
+qa         -> done        REFUSED  has not passed in_review
+qa         -> in_progress ok       backwards is open
+qa         -> in_review   ok
+in_review  -> done        ok       last gate passed
+```
+
+Plus: an agent-ratified gate refusing a member, an ungated rung completely
+inert, and cancelling out of a gate mid-walk.
+
+**One thing to be honest about.** My first attempt at the agent-ratifier check
+looked like a bug — a member released an agent-ratified gate. It was a bad test:
+the issue I used had a parent and no declared rung, so its depth put it on a
+different rung with no gates at all. The code was right. Worth recording because
+the failure mode is the one this whole table invites — a gate that looks declared
+and is silently inert on the unit in front of you.
+
+**The sub-case that did not run.** "A different agent cannot release the gate" is
+written and skips: the test workspace has one agent. The member-vs-agent and
+agent-vs-human-gate cases both ran.
+
 ## What was NOT done
 
-- **No gate and no ratifier per rung.** Two of Galactics' five level parameters
-  have nowhere to live in Multica, and unlike the other three this is not one
-  field — a gate is a thing with the right to say no, and nothing in the product
-  has that shape. Not started: it needs a decision about what a gate is allowed
-  to do before any of it can be designed.
+- **No parallel ratification.** Gates queue; they cannot both hold a unit. Two
+  people who must each sign off the same piece of content is a real case and it
+  has no worked example on either side, so the tally was not guessed at. §22.
+- **Nothing reads a gate back into the product's own UI.** The board renders a
+  unit parked at a gate (§22 fixed that), but nothing shows WHICH gate, who is
+  expected, or how long it has stood there. CLI and API only, like level_policy.
+- **The gate refuses on two paths, not every path.** `UpdateIssue` and the batch
+  update — the two a human or an agent drives. The system transitions
+  (`UpdateIssueStatus`: a hand parking, a PR sync, a task completing, the
+  runtime sweeper) are deliberately not gated: those are the machine moving a
+  unit, not somebody ratifying it, and gating a raised hand's park would be a
+  defect. Whether that split is the right one is untested.
 - **Nothing reads the referential back.** A rule lands in `referential_entry` and
   is counted; no agent is handed it when it starts work. The loop is closed for
   measurement, not for use. That is the honest limit of §21.
@@ -833,6 +951,7 @@ were in, which is §"migration 486" doing its job.
 - [x] what a rung runs on — level_policy, no daemon change
 - [x] read Galactics' own cycle, and recorded where the two models collide
 - [x] the trigger set, closed — and the answer scope that gives the count an output
+- [x] the gate and its ratifier, per rung — the first refusal in this spike
 
 Whether any of this is worth proposing upstream is a decision for later and was
 not part of this session.
