@@ -1143,6 +1143,15 @@ squad. A run with nothing to verify does not carry the surface.
   hang after claiming (Codex: 12 minutes, zero `task_message` rows) or never
   claim. **The whole spike is configured and refusing correctly, and unproven
   against a real agent.** That is the single largest gap in it.
+- **A provider auth failure is diagnosable on one runtime and invisible on
+  another.** The same cause — a dead credential — came back from Claude as a
+  typed `agent_error.provider_auth_or_access`, a `failed` task and a comment on
+  the issue. From Codex it was a task sitting in `running` for twelve minutes
+  with zero `task_message` rows, no error, and the queue blocked behind it.
+  Confirmed at the source: `codex login status` reports "Logged in using
+  ChatGPT" while `codex exec` gets `401 Unauthorized` and cannot refresh its
+  token. A provider that cannot authenticate should produce a FAILED task, not a
+  suspended one. Not a spike defect, and not fixed here.
 - **A rebind strands pending work.** A queued task carries the runtime it was
   enqueued against. Rebinding an agent between runtimes leaves its queued task
   unclaimable with no error and no sweep — the daemon logs "task claim: no tasks
