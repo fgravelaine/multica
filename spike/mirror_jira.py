@@ -65,6 +65,16 @@ STATUS_MAP = {
     "blocked": "blocked",
 }
 
+# Jira expresses exactly two hierarchy levels in this project: Epic at 1 (four
+# of them) and Task / Story / Bug at 0 (179). The ladder has five rungs. The
+# mirror fills the two Jira can prove and writes none of the others.
+#
+# Promoting GALACTEAM-132 to `mission` because it carries 25 children is a
+# judgement, and a judgement a script makes is a judgement nobody made. The
+# mirror also never overwrites a rung that is already set, so a promotion done
+# by hand survives every later run.
+LEVEL_BY_HIERARCHY = {1: "objective", 0: "task"}
+
 PRIORITY_MAP = {
     "highest": "urgent",
     "high": "high",
@@ -121,7 +131,7 @@ class Jira:
         return self._run([
             "search", "--jql", f"project = {self.project} ORDER BY created ASC",
             "--paginate", "--json",
-            "--fields", "key,summary,status,priority,description",
+            "--fields", "key,summary,status,priority,description,issuetype",
         ])
 
     def parent_links(self, log):
@@ -284,7 +294,7 @@ def main():
     log(f"Jira {args.jira_project}: {len(issues)} issues")
 
     project = mc.project(args.project, log) if not args.check else {"id": None}
-    created = updated = skipped = 0
+    created = updated = skipped = levelled = 0
     unmapped = []
 
     # Pass 1 — the issues themselves. Parents are linked in pass 2, because a
@@ -312,16 +322,35 @@ def main():
             log(f"  {key:16} {'update' if existing else 'create':6} {status:16} {title[:50]}")
             continue
 
+        rung = LEVEL_BY_HIERARCHY.get(
+            (f.get("issuetype") or {}).get("hierarchyLevel"))
+
         if existing:
+            # A declared rung turns the gates on, and the gates refuse a
+            # forward move by anyone who is not the ratifier. The mirror is not
+            # ratifying — it is replaying a decision Jira already holds — so the
+            # rung comes off for the write and goes back after. What goes back
+            # is what the issue HELD, not what this script would compute: a
+            # promotion done by hand outranks the mapping.
+            held = (mc.call("GET", f"/api/issues/{existing}") or {}).get("level")
+            if held:
+                mc.call("PUT", f"/api/issues/{existing}/level", {"level": None})
             mc.call("PUT", f"/api/issues/{existing}", {
                 "title": title, "description": body,
                 "status": status, "priority": priority,
                 "suppress_run": True,
             })
+            if held:
+                mc.call("PUT", f"/api/issues/{existing}/level", {"level": held})
+            elif rung:
+                mc.call("PUT", f"/api/issues/{existing}/level", {"level": rung})
+                levelled += 1
             updated += 1
         else:
             # Created in `backlog` and moved after, so the create path can
-            # never enqueue a run for an issue that arrives mid-flight.
+            # never enqueue a run for an issue that arrives mid-flight. The rung
+            # is declared LAST, once the status is where Jira says it is —
+            # declaring it first would gate the very move that puts it there.
             new = mc.call("POST", "/api/issues", {
                 "title": title, "description": body,
                 "status": "backlog", "priority": priority,
@@ -333,6 +362,9 @@ def main():
                 mc.call("PUT", f"/api/issues/{new['id']}", {
                     "status": status, "suppress_run": True,
                 })
+            if rung:
+                mc.call("PUT", f"/api/issues/{new['id']}/level", {"level": rung})
+                levelled += 1
             created += 1
 
     # Pass 2 — parent links, now that every key that will exist does. The links
@@ -350,7 +382,7 @@ def main():
                 linked += 1
         state.save()
 
-    log(f"created {created}, updated {updated}, linked {linked}, skipped {skipped}")
+    log(f"created {created}, updated {updated}, levelled {levelled}, linked {linked}, skipped {skipped}")
     if unmapped:
         log("Unmapped Jira statuses — add them to STATUS_MAP rather than guessing:")
         for u in unmapped:

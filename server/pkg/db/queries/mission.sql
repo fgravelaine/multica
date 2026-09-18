@@ -352,10 +352,14 @@ JOIN issue i ON i.id = r.id
 JOIN issue root ON root.id = r.root_id
 LEFT JOIN issue parent ON parent.id = r.parent_issue_id
 WHERE COALESCE(r.level, r.derived) = @level::text
-  -- Both filters are optional and independent: "orphans only", "one campaign",
-  -- or both at once.
+  -- Every filter is optional and independent: "orphans only", "one campaign",
+  -- "one status", "one project", or any combination. None of them narrows the
+  -- counts above, which are always the whole workspace — a filtered board that
+  -- also filtered its own totals could never tell you how much you were hiding.
   AND (NOT @orphans_only::boolean OR (r.level IS NOT NULL AND r.level <> r.derived))
   AND (sqlc.narg('campaign_id')::uuid IS NULL OR r.root_id = sqlc.narg('campaign_id')::uuid)
+  AND (sqlc.narg('status')::text IS NULL OR i.status = sqlc.narg('status')::text)
+  AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id')::uuid)
 ORDER BY i.last_activity_at DESC NULLS LAST, i.number DESC;
 
 -- name: ListMissionDependencies :many

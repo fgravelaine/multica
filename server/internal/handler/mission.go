@@ -1460,6 +1460,27 @@ func (h *Handler) ListMissions(w http.ResponseWriter, r *http.Request) {
 		campaignFilter = parsed
 	}
 
+	// A status has to exist in THIS workspace's catalog. Resolving it here is
+	// what turns a typo into a 400 instead of an empty board, which reads as
+	// "nothing at this rung" and is the more expensive answer to be wrong about.
+	var statusFilter pgtype.Text
+	if raw := r.URL.Query().Get("status"); raw != "" {
+		key, ok := h.resolveIssueStatusKey(w, r, wsUUID, raw)
+		if !ok {
+			return
+		}
+		statusFilter = pgtype.Text{String: key, Valid: true}
+	}
+
+	var projectFilter pgtype.UUID
+	if raw := r.URL.Query().Get("project"); raw != "" {
+		parsed, ok := parseUUIDOrBadRequest(w, raw, "project")
+		if !ok {
+			return
+		}
+		projectFilter = parsed
+	}
+
 	counts, err := h.Queries.CountIssuesByLevel(r.Context(), db.CountIssuesByLevelParams{
 		WorkspaceID: wsUUID,
 		MaxDepth:    int32(missionBoardDepth),
@@ -1488,6 +1509,8 @@ func (h *Handler) ListMissions(w http.ResponseWriter, r *http.Request) {
 		Level:       level,
 		OrphansOnly: orphansOnly,
 		CampaignID:  campaignFilter,
+		Status:      statusFilter,
+		ProjectID:   projectFilter,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list the board")

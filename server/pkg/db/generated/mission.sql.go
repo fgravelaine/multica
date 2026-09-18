@@ -334,14 +334,14 @@ const listIssuesAtLevel = `-- name: ListIssuesAtLevel :many
 WITH RECURSIVE walk AS (
     SELECT i.id, i.parent_issue_id, i.level, 0::int AS depth, i.id AS root_id
     FROM issue i
-    WHERE i.workspace_id = $4 AND i.parent_issue_id IS NULL
+    WHERE i.workspace_id = $6 AND i.parent_issue_id IS NULL
 
     UNION ALL
 
     SELECT c.id, c.parent_issue_id, c.level, w.depth + 1, w.root_id
     FROM issue c
     JOIN walk w ON c.parent_issue_id = w.id
-    WHERE w.depth + 1 <= $5::int
+    WHERE w.depth + 1 <= $7::int
 ),
 rung AS (
     SELECT
@@ -376,10 +376,14 @@ JOIN issue i ON i.id = r.id
 JOIN issue root ON root.id = r.root_id
 LEFT JOIN issue parent ON parent.id = r.parent_issue_id
 WHERE COALESCE(r.level, r.derived) = $1::text
-  -- Both filters are optional and independent: "orphans only", "one campaign",
-  -- or both at once.
+  -- Every filter is optional and independent: "orphans only", "one campaign",
+  -- "one status", "one project", or any combination. None of them narrows the
+  -- counts above, which are always the whole workspace — a filtered board that
+  -- also filtered its own totals could never tell you how much you were hiding.
   AND (NOT $2::boolean OR (r.level IS NOT NULL AND r.level <> r.derived))
   AND ($3::uuid IS NULL OR r.root_id = $3::uuid)
+  AND ($4::text IS NULL OR i.status = $4::text)
+  AND ($5::uuid IS NULL OR i.project_id = $5::uuid)
 ORDER BY i.last_activity_at DESC NULLS LAST, i.number DESC
 `
 
@@ -387,6 +391,8 @@ type ListIssuesAtLevelParams struct {
 	Level       string      `json:"level"`
 	OrphansOnly bool        `json:"orphans_only"`
 	CampaignID  pgtype.UUID `json:"campaign_id"`
+	Status      pgtype.Text `json:"status"`
+	ProjectID   pgtype.UUID `json:"project_id"`
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 	MaxDepth    int32       `json:"max_depth"`
 }
@@ -419,6 +425,8 @@ func (q *Queries) ListIssuesAtLevel(ctx context.Context, arg ListIssuesAtLevelPa
 		arg.Level,
 		arg.OrphansOnly,
 		arg.CampaignID,
+		arg.Status,
+		arg.ProjectID,
 		arg.WorkspaceID,
 		arg.MaxDepth,
 	)

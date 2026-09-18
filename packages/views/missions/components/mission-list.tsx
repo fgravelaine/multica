@@ -52,18 +52,34 @@ export function MissionList() {
   const [level, setLevel] = useState<MissionLevel>("campaign");
   const [orphansOnly, setOrphansOnly] = useState(false);
   const [campaign, setCampaign] = useState<{ id: string; title: string } | null>(null);
+  // "" is "every one of them", not "none" — an empty filter is the board's
+  // resting state, and the server reads a missing parameter the same way.
+  const [status, setStatus] = useState("");
+  const [project, setProject] = useState("");
+
+  const wsId = useWorkspaceId();
+  const { activeStatuses } = useIssueStatuses(wsId);
+  const { data: projectData } = useQuery({
+    queryKey: ["projects", wsId],
+    queryFn: () => api.listProjects(),
+    enabled: Boolean(wsId),
+  });
+  const projects = projectData?.projects ?? [];
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["missions", level, orphansOnly, campaign?.id ?? null],
+    queryKey: ["missions", level, orphansOnly, campaign?.id ?? null, status, project],
     queryFn: () =>
       api.listMissions({
         level,
         orphans: orphansOnly,
         campaign: campaign?.id,
+        status: status || undefined,
+        project: project || undefined,
       }),
   });
 
   const orphansHere = data?.levels.find((l) => l.level === level)?.orphans ?? 0;
+  const filtered = Boolean(status || project || campaign || orphansOnly);
 
   return (
     <div className="h-full min-h-0 overflow-y-auto overscroll-contain">
@@ -131,6 +147,44 @@ export function MissionList() {
             On their own
           </button>
 
+          <select
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+            aria-label="Filter by status"
+            className={cn(
+              "rounded-md border bg-transparent px-2 py-0.5 text-caption transition-colors",
+              status
+                ? "border-foreground/30 bg-accent text-foreground"
+                : "text-muted-foreground hover:border-foreground/20",
+            )}
+          >
+            <option value="">Any status</option>
+            {activeStatuses.map((s) => (
+              <option key={s.key} value={s.key}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={project}
+            onChange={(e) => setProject(e.target.value)}
+            aria-label="Filter by project"
+            className={cn(
+              "rounded-md border bg-transparent px-2 py-0.5 text-caption transition-colors",
+              project
+                ? "border-foreground/30 bg-accent text-foreground"
+                : "text-muted-foreground hover:border-foreground/20",
+            )}
+          >
+            <option value="">Any project</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.title}
+              </option>
+            ))}
+          </select>
+
           {campaign ? (
             <button
               type="button"
@@ -151,7 +205,9 @@ export function MissionList() {
           <p className="rounded-lg border border-dashed px-4 py-6 text-center text-caption text-muted-foreground">
             {orphansOnly
               ? "Nothing standing on its own here — every unit hangs where it says it does."
-              : "Nothing on this rung."}
+              : filtered
+                ? "Nothing on this rung matches the filters. The counts above are the whole workspace."
+                : "Nothing on this rung."}
           </p>
         ) : (
           <ul className="divide-y rounded-lg border">
