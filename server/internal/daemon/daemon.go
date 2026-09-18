@@ -7728,6 +7728,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		InitiatorEmail:                   task.InitiatorEmail,
 		WorkspaceContext:                 task.WorkspaceContext,
 		IssueStatuses:                    convertIssueStatusesForEnv(task.IssueStatuses),
+		AcceptanceCriteria:               convertCriteriaForEnv(task.AcceptanceCriteria),
 		IssueStatusesOmitted:             task.IssueStatusesOmitted,
 		ConnectedApps:                    task.ConnectedApps,
 	}
@@ -9839,6 +9840,24 @@ func convertIssueStatusesForEnv(statuses []IssueStatusData) []execenv.IssueStatu
 	result := make([]execenv.IssueStatusForEnv, len(statuses))
 	for i, s := range statuses {
 		result[i] = execenv.IssueStatusForEnv{Key: s.Key, Name: s.Name, Category: s.Category, Description: s.Description}
+	}
+	return result
+}
+
+// SPIKE: the criteria this unit is verified against.
+func convertCriteriaForEnv(criteria []CriterionData) []execenv.CriterionForEnv {
+	if len(criteria) == 0 {
+		return nil
+	}
+	result := make([]execenv.CriterionForEnv, len(criteria))
+	for i, c := range criteria {
+		result[i] = execenv.CriterionForEnv{
+			Ordinal:   c.Ordinal,
+			Statement: c.Statement,
+			Ruled:     c.Ruled,
+			Passed:    c.Passed,
+			Evidence:  c.Evidence,
+		}
 	}
 	return result
 }

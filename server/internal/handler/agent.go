@@ -347,6 +347,21 @@ type TaskIssueStatusData struct {
 	Description string `json:"description,omitempty"`
 }
 
+// TaskCriterionData is one acceptance criterion as the claim payload carries
+// it, with the last thing anyone ruled about it.
+//
+// Ruled and Passed are separate on purpose. Passed is coalesced server-side and
+// means nothing on its own; collapsing them would tell an agent that every
+// criterion nobody has looked at yet has FAILED, which is the most alarming
+// possible way to say "not checked".
+type TaskCriterionData struct {
+	Ordinal   int32  `json:"ordinal"`
+	Statement string `json:"statement"`
+	Ruled     bool   `json:"ruled"`
+	Passed    bool   `json:"passed,omitempty"`
+	Evidence  string `json:"evidence,omitempty"`
+}
+
 // TaskCancellationActor is the point-in-time actor snapshot attached to a
 // cancelled run. Type stays open for forward compatibility; current producers
 // emit member, agent, or system.
@@ -392,6 +407,9 @@ type AgentTaskResponse struct {
 	// existing deployments byte-identical. Capped at taskIssueStatusCap
 	// entries; IssueStatusesOmitted carries the overflow count.
 	IssueStatuses []TaskIssueStatusData `json:"issue_statuses,omitempty"`
+	// SPIKE: what this unit is verified against. Omitted when the issue has
+	// none, which an older daemon renders as no section at all.
+	AcceptanceCriteria []TaskCriterionData `json:"acceptance_criteria,omitempty"`
 	// IssueStatusesOmitted is how many active custom statuses were dropped by
 	// the cap, so the brief can say the list is incomplete instead of
 	// presenting a truncated catalog as the whole one.

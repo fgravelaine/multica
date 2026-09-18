@@ -93,8 +93,12 @@ type Task struct {
 	// order. Rendered into the brief's status-command line; empty (including on
 	// old servers that never send the field) keeps the brief byte-identical to
 	// the built-in-only form. IssueStatusesOmitted is the cap overflow count.
-	IssueStatuses                 []IssueStatusData      `json:"issue_statuses,omitempty"`
-	IssueStatusesOmitted          int                    `json:"issue_statuses_omitted,omitempty"`
+	IssueStatuses        []IssueStatusData `json:"issue_statuses,omitempty"`
+	IssueStatusesOmitted int               `json:"issue_statuses_omitted,omitempty"`
+	// SPIKE: AcceptanceCriteria mirrors the claim payload's criteria for this
+	// issue, with the latest verdict on each. Absent on an issue with none, and
+	// from any server that predates them.
+	AcceptanceCriteria            []CriterionData        `json:"acceptance_criteria,omitempty"`
 	ThreadName                    string                 `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
 	Agent                         *AgentData             `json:"agent,omitempty"`
 	ConnectedApps                 []ConnectedAppData     `json:"connected_apps,omitempty"` // per-run app capabilities mounted through runtime MCP overlays
@@ -320,4 +324,16 @@ type PluginHookTool struct {
 	Name           string          `json:"name"`
 	Description    string          `json:"description"`
 	InputSchema    json.RawMessage `json:"input_schema,omitempty"`
+}
+
+// CriterionData is one acceptance criterion and the last verdict on it.
+//
+// Ruled is the two-state answer; Passed means nothing without it. See
+// TaskCriterionData server-side for why they are not one field.
+type CriterionData struct {
+	Ordinal   int32  `json:"ordinal"`
+	Statement string `json:"statement"`
+	Ruled     bool   `json:"ruled"`
+	Passed    bool   `json:"passed,omitempty"`
+	Evidence  string `json:"evidence,omitempty"`
 }

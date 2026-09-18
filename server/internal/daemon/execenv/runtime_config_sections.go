@@ -274,6 +274,7 @@ func writeAvailableCommands(b *strings.Builder, ctx TaskContextForEnv) {
 	// ownership-only --no-start path if the command is hidden behind --help.
 	b.WriteString("- `multica issue assign <id> (--to X | --to-id <uuid> | --unassign) [--no-start]` — change ownership. On assign/update/status, `--no-start` records the change without starting another run — use it when the work is already underway.\n")
 	writeIssueStatusCommand(b, ctx)
+	writeVerifyCommands(b, ctx)
 	b.WriteString("- `multica issue children <id> [--output json]` — list a parent's sub-issues grouped by stage.\n")
 	b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-file <path> | --content-stdin] [--parent <comment-id>] [--attachment <path>]` — post a comment. Agent-authored bodies MUST use `--content-file`; see `## Comment Formatting` for why. `multica issue comment add --help` for full flags.\n")
 	b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>] [--fresh]` — repository checkout on a dedicated branch. Re-running it keeps an existing checkout that has uncommitted or unpushed work, or is already on this task's branch, and only fetches. `--fresh` discards uncommitted and untracked files and starts a new branch; commits stay on the old branch, but push any you still need first.\n\n")
@@ -288,6 +289,63 @@ func writeAvailableCommands(b *strings.Builder, ctx TaskContextForEnv) {
 		b.WriteString("### Squad maintenance\n")
 		b.WriteString("- `multica squad member set-role <squad-id> --member-id <id> --member-type <agent|member> --role <role> [--output json]` — change role in place (use this instead of remove+add).\n\n")
 	}
+}
+
+// writeVerifyCommands emits the two verify verbs, and only when this unit has
+// criteria to verify.
+//
+// SPIKE. Gated on the criteria existing for the same reason squad maintenance
+// is gated on leading a squad: a run with nothing to verify does not need to
+// carry the surface, and dead weight in every brief is what MUL-5442 already
+// called out.
+//
+// The wording matters more than usual here. An agent told to "record the
+// verdict on the issue" — which is what AP-5's own file says — will reach for
+// `issue comment add`, because that is the verb it knows. Naming the command
+// next to the criteria is what makes the structured path the obvious one
+// instead of the discoverable-if-you-look-for-it one.
+func writeVerifyCommands(b *strings.Builder, ctx TaskContextForEnv) {
+	if len(ctx.AcceptanceCriteria) == 0 {
+		return
+	}
+	b.WriteString("- `multica verdict <id> <criterion> <pass|fail> --evidence \"...\"` — rule on ONE acceptance criterion. One verdict per criterion, never an aggregate; evidence is required on a pass as much as on a fail. A comment is not a verdict: a gate that reads verdicts cannot read prose.\n")
+	b.WriteString("- `multica criteria <id>` — the criteria and their current verdicts.\n")
+}
+
+// writeAcceptanceCriteria renders what this unit is verified against.
+//
+// SPIKE. The criteria have been objects since migration 490 and the gate reads
+// their verdicts, but nothing handed them to the agent that has to SATISFY
+// them — it received a description and was left to find the list inside it.
+// AP-5's file calls the criteria "your entire mandate"; a mandate you have to
+// go looking for is not one.
+//
+// Statements are user-authored and pass through sanitizeNameForBriefMarkdown,
+// like status names: a crafted criterion must not be able to inject a heading
+// or break out of the surrounding markdown.
+func writeAcceptanceCriteria(b *strings.Builder, ctx TaskContextForEnv) {
+	if len(ctx.AcceptanceCriteria) == 0 {
+		return
+	}
+	b.WriteString("## Acceptance Criteria\n\n")
+	b.WriteString("What this unit is verified against, one verdict each. These are the mandate; nothing else is.\n\n")
+	for _, c := range ctx.AcceptanceCriteria {
+		// "—" rather than "fail" for an unruled criterion. Passed is coalesced
+		// upstream, so printing it without checking Ruled would mark every
+		// criterion nobody has looked at yet as failed.
+		mark := "—"
+		if c.Ruled {
+			mark = "pass"
+			if !c.Passed {
+				mark = "FAIL"
+			}
+		}
+		fmt.Fprintf(b, "%d. [%s] %s\n", c.Ordinal, mark, sanitizeNameForBriefMarkdown(c.Statement))
+		if c.Ruled && c.Evidence != "" {
+			fmt.Fprintf(b, "   evidence: %s\n", sanitizeNameForBriefMarkdown(c.Evidence))
+		}
+	}
+	b.WriteString("\n")
 }
 
 // briefStatusCategoryOrder groups the briefing catalog by internal lifecycle,
@@ -997,6 +1055,9 @@ func buildMetaSkillContentSlim(provider string, ctx TaskContextForEnv) string {
 
 	if kind == kindIssue {
 		writeCommentFormatting(&b)
+		// SPIKE: what this unit is verified against. Issue runs only — a chat
+		// or quick-create turn has no unit and nothing to verify.
+		writeAcceptanceCriteria(&b, ctx)
 	}
 
 	if kind != kindQuickCreate {

@@ -214,6 +214,9 @@ type TaskContextForEnv struct {
 	// cap dropped from IssueStatuses, so the brief can disclose truncation
 	// instead of presenting a partial catalog as complete.
 	IssueStatusesOmitted int
+	// SPIKE: what this unit is verified against, with the latest verdict on
+	// each. Empty on an issue with no criteria, which renders no section.
+	AcceptanceCriteria []CriterionForEnv
 	// ConnectedApps lists per-run external app capabilities mounted through
 	// MCP overlays. Rendered briefly so the agent can map app names such as
 	// Notion to the actual MCP server name (`composio`).
@@ -244,6 +247,19 @@ type TaskContextForEnv struct {
 // through the brief sanitizers before rendering; Key is constrained by the
 // storage CHECK to `^[a-z0-9][a-z0-9_]{0,31}$` but is still guarded with
 // sanitizeBriefCodeToken as defense-in-depth.
+// CriterionForEnv is one acceptance criterion in the brief.
+//
+// Ruled is the two-state answer and Passed means nothing without it. Rendering
+// Passed alone would print "failed" against every criterion nobody has looked
+// at yet.
+type CriterionForEnv struct {
+	Ordinal   int32
+	Statement string
+	Ruled     bool
+	Passed    bool
+	Evidence  string
+}
+
 type IssueStatusForEnv struct {
 	Key         string
 	Name        string

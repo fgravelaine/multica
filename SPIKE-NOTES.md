@@ -1069,6 +1069,57 @@ an issue with no criteria       REFUSED  "no acceptance criteria"
 The last-but-one line is the point: both conditions hold independently, and the
 gate says which one is in the way.
 
+## 25. The agent is handed its mandate
+
+§24 made the criteria objects and taught the gate to read their verdicts.
+Nothing gave them to the agent that has to SATISFY them: it received a
+description and was left to find the list inside it. AP-5's file calls the
+criteria *"your entire mandate"* — a mandate you have to go looking for is not
+one.
+
+Four hops, following the path the status catalog already takes: loaded on claim,
+onto the claim payload, across the wire, into the brief. Degrades to no section
+rather than failing the claim, because an issue with no criteria is a finding
+for whoever verifies it, not a reason to refuse to start the work.
+
+```
+## Acceptance Criteria
+
+What this unit is verified against, one verdict each. These are the
+mandate; nothing else is.
+
+1. [pass] Returns used, limit and a percentage
+   evidence: curl returned all three
+2. [FAIL] Free plan gets limit 1000
+   evidence: got 500
+3. [—]    Unauthenticated gets 401
+```
+
+**`—` and not `fail`, and that is the test worth keeping.** `passed` is
+coalesced server-side and means nothing without `ruled`; rendering it alone
+would mark every criterion nobody has looked at yet as FAILED. That is the most
+alarming possible way to say "not checked", and it would send an agent chasing a
+bug that is not there.
+
+### Naming the verb where the agent is looking
+
+The verify commands render next to the criteria, and only when there are any:
+
+```
+- `multica verdict <id> <criterion> <pass|fail> --evidence "..."` — rule on ONE
+  acceptance criterion. One verdict per criterion, never an aggregate; evidence
+  is required on a pass as much as on a fail. A comment is not a verdict: a gate
+  that reads verdicts cannot read prose.
+```
+
+That last sentence is load-bearing. AP-5's own file says *"record the verdict on
+the issue"*, and an agent reading that reaches for `issue comment add` — the
+verb it already knows. §23's group made `multica verdict` findable; this makes
+it the obvious one at the moment it is needed.
+
+**Gated on the criteria existing**, like squad maintenance is gated on leading a
+squad. A run with nothing to verify does not carry the surface.
+
 ## What was NOT done
 
 - **No parallel ratification.** Gates queue; they cannot both hold a unit. Two
@@ -1086,10 +1137,17 @@ gate says which one is in the way.
 - **Nothing reads the referential back.** A rule lands in `referential_entry` and
   is counted; no agent is handed it when it starts work. The loop is closed for
   measurement, not for use. That is the honest limit of §21.
-- **Nothing reads a criterion back to the agent that must satisfy it.** The
-  criteria are objects now (§24) and the gate reads the verdicts, but an agent
-  starting work is still handed a description, not a list. Same shape as the
-  referential gap above: closed for measurement, open for use.
+- **No agent has ever run any of this.** Everything measured in §21–§25 was
+  driven from the CLI by a human. The provider on this machine is not logged in
+  — `"Not logged in · Please run /login"` — and the two other runtimes either
+  hang after claiming (Codex: 12 minutes, zero `task_message` rows) or never
+  claim. **The whole spike is configured and refusing correctly, and unproven
+  against a real agent.** That is the single largest gap in it.
+- **A rebind strands pending work.** A queued task carries the runtime it was
+  enqueued against. Rebinding an agent between runtimes leaves its queued task
+  unclaimable with no error and no sweep — the daemon logs "task claim: no tasks
+  available" forever. Found by doing something unusual; nothing recovers from it.
+  Not a spike defect, and not fixed here.
 - **Referentials are read-only.** Six built-ins, seeded lazily, no create
   endpoint. Veezeet's own references — its domain model, its API contract —
   cannot be added. `brand_register` and `product_direction` happen to be there.
@@ -1142,6 +1200,8 @@ gate says which one is in the way.
 - [x] the Galactic team seeded into a workspace, Veezeet beside it
 - [x] scripted gates — 13 of gate-pr's 13 checks now expressible
 - [x] the verify beat — criteria and verdicts as objects, read by the gate
+- [x] the criteria reach the agent that has to satisfy them
+- [ ] **a real agent run, end to end — blocked on the provider login**
 
 Whether any of this is worth proposing upstream is a decision for later and was
 not part of this session.

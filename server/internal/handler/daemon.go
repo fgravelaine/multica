@@ -3341,6 +3341,46 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		)
 	}
 
+	// SPIKE: the acceptance criteria this unit is verified against.
+	//
+	// Loaded on claim like the status catalog above, and for the same reason it
+	// is loaded rather than joined once: an edit lands on the next task.
+	//
+	// THE GAP THIS CLOSES. The criteria became objects in migration 490 and the
+	// gate reads their verdicts, but nothing handed them to the agent that has
+	// to satisfy them — it got a description and was expected to find the list
+	// inside it. AP-5's file says "the acceptance criteria are your entire
+	// mandate"; a mandate the agent has to go looking for is not one.
+	//
+	// Degrades to a brief with no criteria section rather than failing the
+	// claim: a unit with no criteria is a finding for whoever verifies it, not
+	// a reason to refuse to start the work.
+	if issueUUID := task.IssueID; issueUUID.Valid {
+		if rows, err := h.Queries.ListLatestVerdictsForIssue(r.Context(), issueUUID); err != nil {
+			slog.Warn("task claim: failed to load acceptance criteria for brief injection",
+				"task_id", uuidToString(task.ID),
+				"issue_id", uuidToString(issueUUID),
+				"error", err,
+			)
+		} else {
+			for _, row := range rows {
+				entry := TaskCriterionData{
+					Ordinal:   row.Ordinal,
+					Statement: row.Statement,
+					Ruled:     row.RuledAt.Valid,
+				}
+				// Passed is coalesced in the query and means nothing on its own;
+				// Ruled is the two-state answer. Sending it unconditionally
+				// would tell an agent that every unchecked criterion had failed.
+				if row.RuledAt.Valid {
+					entry.Passed = row.Passed
+					entry.Evidence = row.Evidence
+				}
+				resp.AcceptanceCriteria = append(resp.AcceptanceCriteria, entry)
+			}
+		}
+	}
+
 	// Workspace status catalog (MUL-6460): active CUSTOM statuses only, so the
 	// daemon can render them into the brief's status-command line. Read on every
 	// claim, like the agent row, so an admin's edit lands on the next task.
