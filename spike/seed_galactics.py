@@ -229,15 +229,20 @@ def seed_gates(api, statuses, agents, log):
     if not qa_key or not ap5:
         log("  gates  SKIPPED — need both a qa status and AP-5")
         return
+    # ORDER MATTERS, and it is the flow's own: `in review → qa → done`.
+    # `in_review` puts the change proposal in front of a reviewer; `qa` puts the
+    # acceptance criteria in front of AP-5. Seeded the other way round until
+    # 2026-09-18, which made `backlog → qa` a legal first step — the walk had
+    # nothing to skip, so the gate that should have stopped it never ran.
     for rung in GATED_RUNGS:
         api.call("PUT", f"/api/level-gates/{rung}", {
-            "position": 1, "status_key": qa_key,
-            "ratifier_type": "agent", "ratifier_id": ap5["id"],
+            "position": 1, "status_key": "in_review", "ratifier_type": "human",
         })
         api.call("PUT", f"/api/level-gates/{rung}", {
-            "position": 2, "status_key": "in_review", "ratifier_type": "human",
+            "position": 2, "status_key": qa_key,
+            "ratifier_type": "agent", "ratifier_id": ap5["id"],
         })
-        log(f"  gates  {rung:18} qa→AP-5, in_review→human")
+        log(f"  gates  {rung:18} in_review→human, qa→AP-5")
 
 
 def main():
