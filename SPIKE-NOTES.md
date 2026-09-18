@@ -1172,6 +1172,72 @@ projection re-lists its columns, and the search parity test carries its own copy
 of the scan. That is the same defect in a third form: a column list written by
 hand in four places, and a test that duplicates two of them.
 
+## 27. A real agent, and it refused a human's evidence
+
+Everything up to here was driven from the CLI by a human. This is the first run
+by an agent, and it changed two of my conclusions.
+
+### "Not logged in" was not a login problem
+
+`claude auth status` reported `loggedIn: true` the whole time. The daemon had
+been running since 15 September with `--no-auto-reload` and held a stale
+environment. `multica daemon restart` fixed it. I had told the Grand Master to
+go and log in; that was wrong, and it cost a round trip.
+
+Then a second one, mine: the daemon BINARY was from 17 Sep 23:01 and §25's brief
+change from 18 Sep 11:06. I had been rebuilding `bin/multica` while the running
+process kept the old one. A daemon started with `--no-auto-reload` does not pick
+up a rebuild, and nothing says so.
+
+### The brief was the whole difference
+
+Same issue, same agent, same persona. Only the brief changed:
+
+```
+without the criteria in the brief
+  -> multica issue comment add
+  -> "**[AP-5]** Verdict: FAIL (0/3 criteria verified)"
+  -> zero rows written
+
+with the criteria in the brief
+  -> multica criteria <id> --output json
+  -> three verdicts, each with its evidence, author_type=agent
+```
+
+The first run is exactly what §25 predicted: AP-5's own file says "record the
+verdict on the issue", and an agent reading that reaches for `issue comment add`
+because that is the verb it already knows. Making `multica verdict` findable
+(§23) was not enough. It had to be named next to the criteria, at the moment
+they are in front of the agent.
+
+### It reverted my verdict
+
+While testing the UI I typed a fabricated `curl` output into an evidence field
+and passed criterion 1. AP-5 found it:
+
+> No repository, deployment, or PR is attached to the Veezeet project — there is
+> no reachable /api/billing/quota to call. The pasted curl output was submitted
+> in a comment as a claim, not produced by this run against a real system.
+> **Reverting the prior PASS: an unverifiable claim is not a passing verdict.**
+
+An agent refused a human's evidence as unverifiable, and wrote a second verdict
+over it. That only works because verdicts ACCUMULATE (§24) rather than
+overwrite — an update-in-place would have let my claim stand or silently erased
+the disagreement. The design decision was made for a different reason
+(keeping "failed twice before passing" answerable) and paid off here.
+
+The gate now reads `qa: criterion 1, 2, 3 failed`.
+
+### What it also showed about rule 3
+
+On the FIRST run — before the brief carried the criteria — AP-5 moved the issue
+from `qa` back to `in_progress` with no verdicts recorded, and the gate allowed
+it. That is §22's rule 3 working as designed: backwards is always open, because
+a privileged rejection strands a unit until exactly one actor appears.
+
+The cost is now visible: **a unit can leave a gate with nothing recorded.** The
+rule still looks right to me, and the trade is no longer theoretical.
+
 ## What was NOT done
 
 - **No parallel ratification.** Gates queue; they cannot both hold a unit. Two
@@ -1189,12 +1255,9 @@ hand in four places, and a test that duplicates two of them.
 - **Nothing reads the referential back.** A rule lands in `referential_entry` and
   is counted; no agent is handed it when it starts work. The loop is closed for
   measurement, not for use. That is the honest limit of §21.
-- **No agent has ever run any of this.** Everything measured in §21–§25 was
-  driven from the CLI by a human. The provider on this machine is not logged in
-  — `"Not logged in · Please run /login"` — and the two other runtimes either
-  hang after claiming (Codex: 12 minutes, zero `task_message` rows) or never
-  claim. **The whole spike is configured and refusing correctly, and unproven
-  against a real agent.** That is the single largest gap in it.
+- **Only ONE agent run, on one issue.** §27 is the whole of it. Nothing here has
+  been exercised by a squad, by a leader dispatching to members, by two agents on
+  one tree, or by anything with a repository attached.
 - **A provider auth failure is diagnosable on one runtime and invisible on
   another.** The same cause — a dead credential — came back from Claude as a
   typed `agent_error.provider_auth_or_access`, a `failed` task and a comment on
@@ -1263,7 +1326,7 @@ hand in four places, and a test that duplicates two of them.
 - [x] the verify beat — criteria and verdicts as objects, read by the gate
 - [x] the criteria reach the agent that has to satisfy them
 - [x] criteria, verdicts and the gate, on the ticket and on the board
-- [ ] **a real agent run, end to end — blocked on the provider login**
+- [x] a real agent run — AP-5 wrote three verdicts, and revoked one of mine
 
 Whether any of this is worth proposing upstream is a decision for later and was
 not part of this session.
