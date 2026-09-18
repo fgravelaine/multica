@@ -239,6 +239,33 @@ export interface RaisedHandOption {
   cost: string;
 }
 
+// SPIKE (not upstream): one acceptance criterion and the last verdict on it.
+//
+// `ruled` and `passed` are separate on purpose. The server coalesces `passed`,
+// so it means nothing on its own — reading it without `ruled` marks every
+// criterion nobody has looked at yet as failed.
+export interface AcceptanceCriterion {
+  id: string;
+  ordinal: number;
+  statement: string;
+  ruled: boolean;
+  passed: boolean;
+  evidence?: string;
+  ruled_at?: string;
+}
+
+// SPIKE (not upstream): one gate on one rung — what must say yes before this
+// rung's work can move on, and who says it.
+export interface LevelGate {
+  level: string;
+  position: number;
+  status_key: string;
+  ratifier_type: "human" | "agent" | "check";
+  ratifier_id?: string;
+  required_checks?: string[];
+  requires_verdicts: boolean;
+}
+
 export interface RaisedHand {
   id: string;
   issue_id: string;

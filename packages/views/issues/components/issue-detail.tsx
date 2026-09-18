@@ -61,7 +61,7 @@ import { AvatarGroup, AvatarGroupCount } from "@multica/ui/components/ui/avatar"
 import { ActorAvatar } from "../../common/actor-avatar";
 // SPIKE: the ladder's two writes. They live on this page because the mission
 // view writes nothing — not a status, not a rung, not a link.
-import { LevelPicker, WaitsOnSection } from "../../missions/components";
+import { LevelPicker, WaitsOnSection, VerifySection } from "../../missions/components";
 import { PropRow } from "../../common/prop-row";
 import { PropertyIcon } from "../../common/property-icon";
 import type { Attachment, Issue, IssueProperty, IssueStatus, IssueStatusCategory, IssuePriority, TimelineEntry, UpdateIssueRequest } from "@multica/core/types";
@@ -3149,6 +3149,13 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               />
             </div>
             {descDragOver && <FileDropOverlay />}
+          </div>
+
+          {/* SPIKE: what this unit is verified against, above what it waits on.
+              Order is deliberate — the criteria are the unit's own mandate, the
+              waits are about other units. Mandate first. */}
+          <div className="mt-6">
+            <VerifySection issueId={issue.id} level={issue.level} status={issue.status} />
           </div>
 
           {/* SPIKE: what this unit is waiting on, beside what is under it.

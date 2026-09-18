@@ -222,6 +222,8 @@ import type {
   CreateCommentSubIssueAgentRequest,
   CreateCommentSubIssueRequest,
   RaisedHand,
+  AcceptanceCriterion,
+  LevelGate,
   MissionResponse,
   MissionBoardResponse,
   MissionBlocker,
@@ -4426,6 +4428,51 @@ export class ApiClient {
       method: "PUT",
       body: JSON.stringify({ level }),
     });
+  }
+
+  // SPIKE (not upstream): what this unit is verified against, and the last
+  // verdict on each criterion.
+  //
+  // `ruled` is the two-state answer and `passed` means nothing without it. The
+  // server coalesces `passed`, so a caller that reads it alone renders every
+  // criterion nobody has looked at yet as FAILED — the most alarming possible
+  // way to say "not checked".
+  async listIssueCriteria(issueId: string): Promise<{ criteria: AcceptanceCriterion[] }> {
+    return this.fetch<{ criteria: AcceptanceCriterion[] }>(`/api/issues/${issueId}/criteria`);
+  }
+
+  // Replaces the list, and drops the verdicts with it — a verdict is evidence
+  // about one exact statement, and a rewritten statement has not been verified.
+  async setIssueCriteria(
+    issueId: string,
+    body: { statements?: string[]; from_description?: boolean },
+  ): Promise<{ count: number }> {
+    return this.fetch<{ count: number }>(`/api/issues/${issueId}/criteria`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+  }
+
+  // One criterion, one verdict. Evidence is required on a pass as much as on a
+  // fail: a pass nobody can reproduce is an aggregate "works fine" in a
+  // per-criterion costume.
+  async recordIssueVerdict(
+    issueId: string,
+    ordinal: number,
+    passed: boolean,
+    evidence: string,
+  ): Promise<void> {
+    await this.fetch(`/api/issues/${issueId}/verdict`, {
+      method: "POST",
+      body: JSON.stringify({ ordinal, passed, evidence }),
+    });
+  }
+
+  // SPIKE (not upstream): the gates a rung declares. Read for the whole
+  // workspace and filtered client-side — the list is tiny and the same for
+  // every issue, so a per-issue request would be a fan-out for nothing.
+  async listLevelGates(): Promise<{ gates: LevelGate[] }> {
+    return this.fetch<{ gates: LevelGate[] }>(`/api/level-gates`);
   }
 
   // SPIKE (not upstream): the mission view. ONE request for the whole tree —

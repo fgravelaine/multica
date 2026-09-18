@@ -2,6 +2,8 @@
 
 import { useCallback, memo } from "react";
 import { AppLink } from "../../navigation";
+import { Lock } from "lucide-react";
+import { useGateForCard, gateReason } from "../../missions/components";
 import { useSortable, defaultAnimateLayoutChanges } from "@dnd-kit/sortable";
 import type { AnimateLayoutChanges } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -110,6 +112,16 @@ export const BoardCardContent = memo(function BoardCardContent({
   // Keeps the chip row from rendering an empty flex container when the status
   // chip is the only thing in it and it decides to render nothing.
   const showCustomStatus = useIsCustomStatus(issue.status);
+  // SPIKE: is this card standing at a gate?
+  //
+  // A gated ticket looked identical to a free one on the board, so the only
+  // signal that it could not move was a 409 toast AFTER trying to drag it. The
+  // block is real and deliberate; discovering it by bumping into it is what
+  // makes a hard block feel like a bug.
+  //
+  // The gate list is one cached workspace-wide query shared by every card — not
+  // a fetch per card, which on a full board would be a request per ticket.
+  const atGate = useGateForCard(issue.level, issue.status);
 
   const showAssigneeName = showAssigneeSection && hasAssignee && !showStartDate && !showDueDate;
   const showUpdatedHint = showAssigneeName && !showChildProgress;
@@ -218,9 +230,18 @@ export const BoardCardContent = memo(function BoardCardContent({
       {/* Chip row: status + project + labels + custom property values.
           The status chip renders only for a CUSTOM status — the column header
           already names the category. (MUL-6243) */}
-      {(showCustomStatus || showProject || showLabels || cardCustomProperties.length > 0) && (
+      {(showCustomStatus || atGate || showProject || showLabels || cardCustomProperties.length > 0) && (
         <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
           <CustomStatusChip status={issue.status} />
+          {atGate && (
+            <span
+              className="inline-flex items-center gap-1 rounded-full bg-muted/60 px-1.5 py-0.5 text-micro text-muted-foreground"
+              title={gateReason(atGate)}
+            >
+              <Lock className="h-2.5 w-2.5" />
+              <span>gate</span>
+            </span>
+          )}
           {showProject && (
             <span className="inline-flex items-center gap-1 rounded-full bg-muted/60 px-1.5 py-0.5 text-micro text-muted-foreground max-w-[160px]">
               <ProjectIcon project={project} size="sm" />
