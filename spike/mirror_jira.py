@@ -26,21 +26,25 @@ Three choices, and each one is here because the obvious alternative was worse:
                 importing sixty issues in `in progress` would enqueue sixty
                 runs against a backlog nobody asked to execute.
 
-Credentials are read from the environment and never written down, the way
-`install-plugin.py` resolves its token rather than committing one:
+Jira is read through `acli`, the Atlassian CLI, which is already authenticated
+on this machine over OAuth. That is the whole reason it is used rather than the
+REST API: there is no token to mint, none to store, and none for this script to
+hold. `acli jira auth status` says whether it will work.
 
-    export JIRA_EMAIL=you@example.com
-    export JIRA_API_TOKEN=...      # id.atlassian.com -> API tokens
+`acli` decides what this can do, and it cannot write a work item without being
+told to, so the one-way property is the tool's rather than a promise in a
+comment.
 
 Idempotent. Run it twice and the second run changes nothing.
 """
 
 import argparse
-import base64
 import json
 import os
 import ssl
+import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -79,49 +83,72 @@ def insecure_ctx():
 
 
 class Jira:
-    """Read-only. Every method here is a GET, and that is the contract."""
+    """Read-only, through `acli`. Two searches, plus one view per child issue.
 
-    def __init__(self, site, email, token):
-        self.site = site.rstrip("/")
-        raw = f"{email}:{token}".encode()
-        self.auth = base64.b64encode(raw).decode()
+    The shape is dictated by two limits of the CLI, not chosen:
 
-    def get(self, path, params=None):
-        url = f"{self.site}{path}"
-        if params:
-            url = f"{url}?{urllib.parse.urlencode(params)}"
-        req = urllib.request.Request(url, method="GET")
-        req.add_header("Authorization", f"Basic {self.auth}")
-        req.add_header("Accept", "application/json")
-        try:
-            with urllib.request.urlopen(req) as r:
-                return json.loads(r.read())
-        except urllib.error.HTTPError as e:
-            body = e.read().decode()[:300]
-            raise RuntimeError(f"GET {path} -> {e.code}: {body}") from None
+      `search --fields` REJECTS `parent`, so a parent link cannot come from the
+      bulk read. `view --fields '*all'` returns it, so the children get a call
+      each — 36 of 183 here, rather than 183 of 183.
 
-    def issues(self, project):
-        """Every issue in the project, oldest first, paged.
+      A `view` per issue is what broke the first full run: 183 sequential calls
+      and one came back "failed to fetch work item details" at number 109, which
+      reads fine on its own. That was the API under load, not a bad issue, and
+      the cost of finding out was the whole run. Hence both the smaller call
+      count and the retry below.
+    """
 
-        `/search/jql` is the endpoint that survived the 2025 deprecation of
-        `/search`; it pages by token rather than by offset.
+    def __init__(self, project):
+        self.project = project
+
+    @staticmethod
+    def _run(args, attempts=2):
+        last = ""
+        for n in range(attempts):
+            out = subprocess.run(
+                ["acli", "jira", "workitem", *args],
+                capture_output=True, text=True,
+            )
+            if out.returncode == 0:
+                return json.loads(out.stdout)
+            last = out.stderr.strip()[:200]
+            if n + 1 < attempts:
+                time.sleep(2)
+        raise RuntimeError(f"acli {' '.join(args)}: {last}")
+
+    def bulk(self):
+        """Every issue, with everything the bulk endpoint will give."""
+        return self._run([
+            "search", "--jql", f"project = {self.project} ORDER BY created ASC",
+            "--paginate", "--json",
+            "--fields", "key,summary,status,priority,description",
+        ])
+
+    def parent_links(self, log):
+        """child key -> parent key, for the issues that have one.
+
+        A read that fails here costs one link, not the run: the issue still
+        mirrors, it just arrives without its parent, and the failure is named
+        so the next run can pick it up.
         """
-        fields = "summary,description,status,priority,parent,issuetype"
-        token, out = None, []
-        while True:
-            params = {
-                "jql": f"project = {project} ORDER BY created ASC",
-                "fields": fields,
-                "maxResults": 100,
-            }
-            if token:
-                params["nextPageToken"] = token
-            page = self.get("/rest/api/3/search/jql", params)
-            out.extend(page.get("issues", []))
-            token = page.get("nextPageToken")
-            if not token or page.get("isLast"):
-                break
-        return out
+        children = self._run([
+            "search", "--jql", f"project = {self.project} AND parent is not EMPTY",
+            "--paginate", "--json",
+        ])
+        links, failed = {}, []
+        for row in children:
+            key = row["key"]
+            try:
+                fields = self._run(["view", key, "--fields", "parent", "--json"])["fields"]
+            except RuntimeError as e:
+                failed.append(f"{key}: {e}")
+                continue
+            parent = (fields.get("parent") or {}).get("key")
+            if parent:
+                links[key] = parent
+        for f in failed:
+            log(f"  parent unread {f}")
+        return links
 
 
 def adf_to_markdown(node, depth=0):
@@ -147,6 +174,18 @@ def adf_to_markdown(node, depth=0):
         return node.get("text", "")
     if kind == "hardBreak":
         return "\n"
+    # A smart link carries no text node — only a URL in its attributes. Left
+    # unhandled it renders as nothing, and a sentence naming two issues comes
+    # out naming neither. Measured on GALACTEAM-184, whose first paragraph lost
+    # both keys it cited.
+    if kind in ("inlineCard", "blockCard", "embedCard"):
+        url = node.get("attrs", {}).get("url", "")
+        tail = url.rstrip("/").rsplit("/", 1)[-1]
+        return tail or url
+    if kind == "mention":
+        return node.get("attrs", {}).get("text", "")
+    if kind == "emoji":
+        return node.get("attrs", {}).get("text", "")
     if kind == "paragraph":
         return inner() + "\n"
     if kind == "heading":
@@ -224,7 +263,6 @@ class State:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--site", default=os.environ.get("JIRA_SITE", "https://frankoa.atlassian.net"))
     ap.add_argument("--jira-project", default="GALACTEAM")
     ap.add_argument("--api", default=os.environ.get("MULTICA_API_URL", "https://api.multica.localhost"))
     ap.add_argument("--token", default=os.environ.get("MULTICA_TOKEN", ""))
@@ -234,19 +272,15 @@ def main():
     ap.add_argument("--check", action="store_true", help="report what would change, write nothing")
     args = ap.parse_args()
 
-    email = os.environ.get("JIRA_EMAIL", "")
-    api_token = os.environ.get("JIRA_API_TOKEN", "")
-    if not email or not api_token:
-        ap.error("JIRA_EMAIL and JIRA_API_TOKEN must be set — this script never stores them")
     if not args.token or not args.workspace:
         ap.error("--token and --workspace are required (or MULTICA_TOKEN / MULTICA_WORKSPACE_ID)")
 
     log = lambda m: print(m, flush=True)
-    jira = Jira(args.site, email, api_token)
+    jira = Jira(args.jira_project)
     mc = Multica(args.api, args.token, args.workspace)
     state = State(args.state)
 
-    issues = jira.issues(args.jira_project)
+    issues = jira.bulk()
     log(f"Jira {args.jira_project}: {len(issues)} issues")
 
     project = mc.project(args.project, log) if not args.check else {"id": None}
@@ -301,13 +335,14 @@ def main():
                 })
             created += 1
 
-    # Pass 2 — parent links, now that every key that will exist does.
+    # Pass 2 — parent links, now that every key that will exist does. The links
+    # are fetched here rather than with the bulk read because `search --fields`
+    # refuses `parent`; see Jira.parent_links.
     linked = 0
     if not args.check:
-        for iss in issues:
-            parent = (iss["fields"].get("parent") or {}).get("key")
-            child_id = state.map.get(iss["key"])
-            parent_id = state.map.get(parent) if parent else None
+        log("Reading parent links")
+        for child, parent in jira.parent_links(log).items():
+            child_id, parent_id = state.map.get(child), state.map.get(parent)
             if child_id and parent_id:
                 mc.call("PUT", f"/api/issues/{child_id}", {
                     "parent_issue_id": parent_id, "suppress_run": True,
