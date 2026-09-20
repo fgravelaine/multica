@@ -4498,10 +4498,11 @@ export class ApiClient {
     issueId: string,
     chosenOption: string,
     answer?: string,
+    handId?: string,
   ): Promise<RaisedHand> {
     return this.fetch<RaisedHand>(`/api/issues/${issueId}/hands/answer`, {
       method: "POST",
-      body: JSON.stringify({ chosen_option: chosenOption, answer }),
+      body: JSON.stringify({ chosen_option: chosenOption, answer, hand_id: handId }),
     });
   }
 

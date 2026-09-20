@@ -33,7 +33,8 @@ export function RaisedHandCard({ issueId }: { issueId: string }) {
   });
 
   const answer = useMutation({
-    mutationFn: (optionKey: string) => api.answerIssueRaisedHand(issueId, optionKey),
+    mutationFn: ({ handId, optionKey }: { handId: string; optionKey: string }) =>
+      api.answerIssueRaisedHand(issueId, optionKey, undefined, handId),
     onSettled: () => {
       setPendingKey(null);
       void queryClient.invalidateQueries({ queryKey: ["raised-hands", issueId] });
@@ -43,20 +44,58 @@ export function RaisedHandCard({ issueId }: { issueId: string }) {
   });
 
   const hands = data?.hands ?? [];
-  const open = hands.find((hand: RaisedHand) => hand.status === "open");
+  // EVERY open hand, not the first. A unit may be parked on several since
+  // migration 491, and it resumes when the last is answered — so rendering one
+  // would hide the reason the board is not moving after you answered it.
+  const open = hands.filter((hand: RaisedHand) => hand.status === "open");
 
-  // Only an OPEN hand is rendered. An answered one is history, and its decision
+  // Only OPEN hands are rendered. An answered one is history, and its decision
   // is already in the comment feed where the agent read it.
-  if (!open) return null;
+  if (open.length === 0) return null;
 
   return (
     <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">
       <div className="mb-2 flex items-center gap-2">
         <Hand className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
         <span className="text-caption font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
-          Hand raised
+          {open.length > 1 ? `${open.length} hands raised` : "Hand raised"}
         </span>
       </div>
+      {open.length > 1 ? (
+        <p className="mb-3 text-caption text-muted-foreground">
+          The unit stays parked until every one is answered.
+        </p>
+      ) : null}
+      {open.map((hand: RaisedHand) => (
+        <HandBlock
+          key={hand.id}
+          hand={hand}
+          pendingKey={pendingKey}
+          isPending={answer.isPending}
+          onPick={(optionKey) => {
+            setPendingKey(`${hand.id}:${optionKey}`);
+            answer.mutate({ handId: hand.id, optionKey });
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function HandBlock({
+  hand,
+  pendingKey,
+  isPending,
+  onPick,
+}: {
+  hand: RaisedHand;
+  pendingKey: string | null;
+  isPending: boolean;
+  onPick: (optionKey: string) => void;
+}) {
+  const open = hand;
+  return (
+    <div className="mb-3 last:mb-0">
 
       <p className="mb-3 text-sm font-medium leading-snug">{open.question}</p>
 
@@ -67,16 +106,13 @@ export function RaisedHandCard({ issueId }: { issueId: string }) {
       <div className="flex flex-col gap-2">
         {open.options.map((option) => {
           const recommended = open.recommendation === option.key;
-          const busy = answer.isPending && pendingKey === option.key;
+          const busy = isPending && pendingKey === `${hand.id}:${option.key}`;
           return (
             <button
               key={option.key}
               type="button"
-              disabled={answer.isPending}
-              onClick={() => {
-                setPendingKey(option.key);
-                answer.mutate(option.key);
-              }}
+              disabled={isPending}
+              onClick={() => onPick(option.key)}
               className={cn(
                 "group rounded-md border px-3 py-2 text-left transition-colors",
                 "hover:border-amber-500 hover:bg-amber-500/10",
@@ -105,8 +141,8 @@ export function RaisedHandCard({ issueId }: { issueId: string }) {
       </div>
 
       <p className="mt-2 text-caption text-muted-foreground">
-        Picking an option records the decision and puts the issue back on the board; the agent
-        continues from where it stopped.
+        Picking an option records the decision. The issue goes back on the board once every open
+        hand is answered, and the agent continues from where it stopped.
       </p>
     </div>
   );

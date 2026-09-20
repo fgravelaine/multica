@@ -276,4 +276,17 @@ export interface RaisedHand {
   material?: string;
   chosen_option?: string;
   answer?: string;
+  /** Which body of knowledge failed to answer this. */
+  referential?: string;
+  /** Why the hand went up, from a closed set of three. */
+  trigger?: "block" | "three_failures" | "contradiction";
+  recipient_type?: "lead" | "human";
+  /**
+   * Answer only. How many hands on this issue are STILL open after this one.
+   * A unit resumes when the last is answered, so a non-zero value means the
+   * decision was recorded and the unit deliberately stayed parked.
+   */
+  still_open?: number;
+  /** Answer only. Whether this answer put the unit back on the board. */
+  resumed?: boolean;
 }

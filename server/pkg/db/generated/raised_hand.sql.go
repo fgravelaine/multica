@@ -157,6 +157,31 @@ func (q *Queries) CountMissionHands(ctx context.Context, issueIds []pgtype.UUID)
 	return i, err
 }
 
+const countOpenHandsForIssue = `-- name: CountOpenHandsForIssue :one
+SELECT COUNT(*) FROM raised_hand
+WHERE issue_id = $1
+  AND status = 'open'
+  AND id <> $2
+`
+
+type CountOpenHandsForIssueParams struct {
+	IssueID     pgtype.UUID `json:"issue_id"`
+	ExcludingID pgtype.UUID `json:"excluding_id"`
+}
+
+// How many questions this unit is still parked on, EXCLUDING one.
+//
+// The exclusion is what makes it usable inside AnswerHand: the hand being
+// answered is already `answered` by the time this runs under the same
+// transaction in some paths and not in others, and a count that depended on
+// which would be a race. Naming the row to skip removes the question.
+func (q *Queries) CountOpenHandsForIssue(ctx context.Context, arg CountOpenHandsForIssueParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countOpenHandsForIssue, arg.IssueID, arg.ExcludingID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countReferentialLoop = `-- name: CountReferentialLoop :many
 SELECT
     h.referential_key,
@@ -267,11 +292,62 @@ func (q *Queries) EscalateRaisedHand(ctx context.Context, arg EscalateRaisedHand
 	return i, err
 }
 
+const getOpenHandByID = `-- name: GetOpenHandByID :one
+SELECT id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at, referential_key, recipient_type, recipient_id, escalated_at, escalation_note, answered_by_level, escalated_by_lead_id, status_before, trigger, answer_scope FROM raised_hand
+WHERE id = $1 AND issue_id = $2 AND status = 'open'
+`
+
+type GetOpenHandByIDParams struct {
+	ID      pgtype.UUID `json:"id"`
+	IssueID pgtype.UUID `json:"issue_id"`
+}
+
+// One named open hand, scoped to its issue so an id from another issue cannot
+// be answered through this one's route.
+func (q *Queries) GetOpenHandByID(ctx context.Context, arg GetOpenHandByIDParams) (RaisedHand, error) {
+	row := q.db.QueryRow(ctx, getOpenHandByID, arg.ID, arg.IssueID)
+	var i RaisedHand
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.IssueID,
+		&i.AgentID,
+		&i.TaskID,
+		&i.Question,
+		&i.Options,
+		&i.Recommendation,
+		&i.Material,
+		&i.Status,
+		&i.ChosenOption,
+		&i.Answer,
+		&i.AnsweredBy,
+		&i.CreatedAt,
+		&i.AnsweredAt,
+		&i.ReferentialKey,
+		&i.RecipientType,
+		&i.RecipientID,
+		&i.EscalatedAt,
+		&i.EscalationNote,
+		&i.AnsweredByLevel,
+		&i.EscalatedByLeadID,
+		&i.StatusBefore,
+		&i.Trigger,
+		&i.AnswerScope,
+	)
+	return i, err
+}
+
 const getOpenHandForIssue = `-- name: GetOpenHandForIssue :one
 SELECT id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at, referential_key, recipient_type, recipient_id, escalated_at, escalation_note, answered_by_level, escalated_by_lead_id, status_before, trigger, answer_scope FROM raised_hand
 WHERE issue_id = $1 AND status = 'open'
 `
 
+// The open hand on this issue, when there is exactly one.
+//
+// Since migration 491 a unit may hold several, so this deliberately stays a
+// `:one`: with two open rows it returns an error rather than picking, and the
+// caller must name which hand it is answering. Silently answering the oldest
+// would apply a decision to a question nobody chose.
 func (q *Queries) GetOpenHandForIssue(ctx context.Context, issueID pgtype.UUID) (RaisedHand, error) {
 	row := q.db.QueryRow(ctx, getOpenHandForIssue, issueID)
 	var i RaisedHand
@@ -451,6 +527,58 @@ func (q *Queries) ListMissionLeadContest(ctx context.Context, issueIds []pgtype.
 			&i.Settled,
 			&i.Escalated,
 			&i.StillOpen,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOpenHandsForIssue = `-- name: ListOpenHandsForIssue :many
+SELECT id, workspace_id, issue_id, agent_id, task_id, question, options, recommendation, material, status, chosen_option, answer, answered_by, created_at, answered_at, referential_key, recipient_type, recipient_id, escalated_at, escalation_note, answered_by_level, escalated_by_lead_id, status_before, trigger, answer_scope FROM raised_hand
+WHERE issue_id = $1 AND status = 'open'
+ORDER BY created_at
+`
+
+func (q *Queries) ListOpenHandsForIssue(ctx context.Context, issueID pgtype.UUID) ([]RaisedHand, error) {
+	rows, err := q.db.Query(ctx, listOpenHandsForIssue, issueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RaisedHand{}
+	for rows.Next() {
+		var i RaisedHand
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.IssueID,
+			&i.AgentID,
+			&i.TaskID,
+			&i.Question,
+			&i.Options,
+			&i.Recommendation,
+			&i.Material,
+			&i.Status,
+			&i.ChosenOption,
+			&i.Answer,
+			&i.AnsweredBy,
+			&i.CreatedAt,
+			&i.AnsweredAt,
+			&i.ReferentialKey,
+			&i.RecipientType,
+			&i.RecipientID,
+			&i.EscalatedAt,
+			&i.EscalationNote,
+			&i.AnsweredByLevel,
+			&i.EscalatedByLeadID,
+			&i.StatusBefore,
+			&i.Trigger,
+			&i.AnswerScope,
 		); err != nil {
 			return nil, err
 		}

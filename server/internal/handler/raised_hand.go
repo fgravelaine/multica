@@ -41,6 +41,10 @@ const (
 	minHandOptions = 2
 )
 
+// handOpen is the one hand status this file branches on. A unit may hold
+// several open hands (migration 491) and resumes when the last is answered.
+const handOpen = "open"
+
 // Where a hand is addressed. `lead` is a squad leader agent that may settle it
 // without disturbing anyone; `human` is the rare destination, and the count of
 // hands that get there is the autonomy number.
@@ -243,6 +247,25 @@ func (h *Handler) RaiseHand(w http.ResponseWriter, r *http.Request) {
 		taskID = id
 	}
 
+	// WHERE THE UNIT CAME FROM IS A PROPERTY OF THE PARK, NOT OF THE HAND.
+	// A unit may now hold several open hands, and only the first of them saw
+	// the status the unit actually held — by the time the second is raised the
+	// unit is already parked, so `issue.Status` is the park itself. Recording
+	// that would make the resume restore `backlog`, and the unit would come
+	// back from its stop into the state it stops in.
+	//
+	// So a hand raised onto an already-parked unit inherits the earliest open
+	// hand's answer to the same question. Migration 491.
+	statusBefore := issue.Status
+	if existing, lerr := h.Queries.ListHandsForIssue(r.Context(), issue.ID); lerr == nil {
+		// Ordered created_at DESC, so the last open row is the earliest one.
+		for _, prior := range existing {
+			if prior.Status == handOpen && prior.StatusBefore.Valid && prior.StatusBefore.String != "" {
+				statusBefore = prior.StatusBefore.String
+			}
+		}
+	}
+
 	hand, err := h.Queries.RaiseHand(r.Context(), db.RaiseHandParams{
 		WorkspaceID:    issue.WorkspaceID,
 		IssueID:        issue.ID,
@@ -255,15 +278,17 @@ func (h *Handler) RaiseHand(w http.ResponseWriter, r *http.Request) {
 		ReferentialKey: pgtype.Text{String: referential, Valid: true},
 		RecipientType:  recipientType,
 		RecipientID:    recipientID,
-		// Read before the park below overwrites it.
-		StatusBefore: pgtype.Text{String: issue.Status, Valid: issue.Status != ""},
+		// Read before the park below overwrites it, and inherited from the
+		// earliest open hand when the unit is already parked.
+		StatusBefore: pgtype.Text{String: statusBefore, Valid: statusBefore != ""},
 		Trigger:      pgtype.Text{String: trigger, Valid: true},
 	})
 	if err != nil {
-		// The partial unique index on (issue_id) WHERE status = 'open' is what
-		// makes a second hand on a stopped unit a 409 rather than a silent
-		// second question nobody will answer.
-		writeError(w, http.StatusConflict, "this issue already has an open raised hand")
+		// Several open hands on one unit are legal since migration 491. What
+		// stopped a second question being "silent and nobody answers it" was
+		// this refusal; what stops it now is the promotion rule — the unit
+		// cannot move while any hand is open, which is stricter.
+		writeError(w, http.StatusInternalServerError, "failed to raise the hand")
 		return
 	}
 
@@ -306,6 +331,52 @@ func (h *Handler) ListHands(w http.ResponseWriter, r *http.Request) {
 	writeMeasuredJSON(w, http.StatusOK, map[string]any{"hands": out})
 }
 
+// resolveOpenHand picks the hand a request is acting on.
+//
+// A unit may hold several open hands since migration 491, so "the open hand on
+// this issue" is no longer a question with one answer. The rule:
+//
+//	an id is given      -> that hand, and it must belong to this issue
+//	no id, one open     -> that one, which is every call written before 491
+//	no id, several open -> 400 listing the ids, because picking the oldest
+//	                       would apply a decision to a question nobody chose
+func (h *Handler) resolveOpenHand(w http.ResponseWriter, r *http.Request, issueID pgtype.UUID, rawID string) (db.RaisedHand, bool) {
+	if strings.TrimSpace(rawID) != "" {
+		id, perr := util.ParseUUID(rawID)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, "hand_id is not a uuid")
+			return db.RaisedHand{}, false
+		}
+		hand, err := h.Queries.GetOpenHandByID(r.Context(), db.GetOpenHandByIDParams{ID: id, IssueID: issueID})
+		if err != nil {
+			writeError(w, http.StatusNotFound, "no open raised hand with that id on this issue")
+			return db.RaisedHand{}, false
+		}
+		return hand, true
+	}
+
+	open, err := h.Queries.ListOpenHandsForIssue(r.Context(), issueID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load raised hands")
+		return db.RaisedHand{}, false
+	}
+	switch len(open) {
+	case 0:
+		writeError(w, http.StatusNotFound, "no open raised hand on this issue")
+		return db.RaisedHand{}, false
+	case 1:
+		return open[0], true
+	default:
+		ids := make([]string, 0, len(open))
+		for _, hand := range open {
+			ids = append(ids, uuidToString(hand.ID))
+		}
+		writeError(w, http.StatusBadRequest,
+			"this issue has "+strconv.Itoa(len(open))+" open raised hands — name one in hand_id: "+strings.Join(ids, ", "))
+		return db.RaisedHand{}, false
+	}
+}
+
 // AnswerHand applies a decision and returns the unit to the board.
 //
 // Three things happen and the order matters: the hand is answered under a CAS
@@ -341,6 +412,9 @@ func (h *Handler) AnswerHand(w http.ResponseWriter, r *http.Request) {
 		// that asked, the rule has to stand on its own to a reader who was not
 		// there and does not know the question.
 		Rule string `json:"rule"`
+		// HandID names which open hand this answers. Optional while a unit
+		// holds one, required the moment it holds several — see resolveOpenHand.
+		HandID string `json:"hand_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -351,13 +425,8 @@ func (h *Handler) AnswerHand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hand, err := h.Queries.GetOpenHandForIssue(r.Context(), issue.ID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "no open raised hand on this issue")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "failed to load raised hand")
+	hand, ok := h.resolveOpenHand(w, r, issue.ID, req.HandID)
+	if !ok {
 		return
 	}
 
@@ -471,6 +540,38 @@ func (h *Handler) AnswerHand(w http.ResponseWriter, r *http.Request) {
 	if hand.StatusBefore.Valid && hand.StatusBefore.String != "" && hand.StatusBefore.String != parkedStatus {
 		resumeTo = hand.StatusBefore.String
 	}
+	// THE UNIT RESUMES WHEN THE LAST HAND IS ANSWERED, NOT THE FIRST.
+	//
+	// This is what replaces the unique index 480 carried, and it is stricter
+	// than the index was: a second question could only go unanswered if the
+	// unit could move while it was open, and it cannot. No ordering is implied
+	// — the open hands are a set that has to empty, not a queue that drains.
+	//
+	// The answered row is excluded by id rather than by status, so this does
+	// not depend on whether the write above is visible to this read yet.
+	stillOpen, cerr := h.Queries.CountOpenHandsForIssue(r.Context(), db.CountOpenHandsForIssueParams{
+		IssueID:     issue.ID,
+		ExcludingID: hand.ID,
+	})
+	if cerr != nil {
+		writeError(w, http.StatusInternalServerError, "answer recorded but the remaining hands could not be counted")
+		return
+	}
+	if stillOpen > 0 {
+		// Answered, recorded, commented — and the unit stays parked. Reporting
+		// the remainder is the point: a decider who answered one of four should
+		// not have to discover that from the board not moving.
+		//
+		// Same body as the resuming path, two keys richer. A caller that only
+		// knows about the hand keeps working; one that reads `resumed` can say
+		// what happened.
+		body := renderHand(answered)
+		body["still_open"] = stillOpen
+		body["resumed"] = false
+		writeMeasuredJSON(w, http.StatusOK, body)
+		return
+	}
+
 	promoted, err := h.Queries.UpdateIssueStatus(r.Context(), db.UpdateIssueStatusParams{
 		ID:          issue.ID,
 		Status:      resumeTo,
@@ -496,7 +597,10 @@ func (h *Handler) AnswerHand(w http.ResponseWriter, r *http.Request) {
 		h.dispatchIssueRun(r.Context(), promoted, trigger, actorType, actorID, "")
 	}
 
-	writeMeasuredJSON(w, http.StatusOK, renderHand(answered))
+	body := renderHand(answered)
+	body["still_open"] = 0
+	body["resumed"] = true
+	writeMeasuredJSON(w, http.StatusOK, body)
 }
 
 func renderHand(hand db.RaisedHand) map[string]any {
@@ -517,6 +621,13 @@ func renderHand(hand db.RaisedHand) map[string]any {
 	}
 	if hand.ReferentialKey.Valid {
 		out["referential"] = hand.ReferentialKey.String
+	}
+	// The referential's stated twin. RaiseHand requires it, validates it against
+	// a closed set of three and says why — "both counters here are counts" — and
+	// until now no read path emitted it, so the counter it exists for could not
+	// be built from the API at all. Found by probing GALACTEAM-136.
+	if hand.Trigger.Valid {
+		out["trigger"] = hand.Trigger.String
 	}
 	out["recipient_type"] = hand.RecipientType
 	if hand.RecipientID.Valid {
@@ -557,18 +668,16 @@ func (h *Handler) EscalateHand(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		Note string `json:"note"`
+		// Which hand, when the unit holds more than one. Same rule as the
+		// answer path — see resolveOpenHand.
+		HandID string `json:"hand_id"`
 	}
 	// An empty body is a valid escalation: a lead that cannot compress the
 	// question further still has to be able to pass it on.
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
-	hand, err := h.Queries.GetOpenHandForIssue(r.Context(), issue.ID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "no open raised hand on this issue")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "failed to load raised hand")
+	hand, ok := h.resolveOpenHand(w, r, issue.ID, req.HandID)
+	if !ok {
 		return
 	}
 

@@ -71,8 +71,25 @@ FROM raised_hand
 WHERE issue_id = ANY(@issue_ids::uuid[]);
 
 -- name: GetOpenHandForIssue :one
+-- The open hand on this issue, when there is exactly one.
+--
+-- Since migration 491 a unit may hold several, so this deliberately stays a
+-- `:one`: with two open rows it returns an error rather than picking, and the
+-- caller must name which hand it is answering. Silently answering the oldest
+-- would apply a decision to a question nobody chose.
 SELECT * FROM raised_hand
 WHERE issue_id = @issue_id AND status = 'open';
+
+-- name: GetOpenHandByID :one
+-- One named open hand, scoped to its issue so an id from another issue cannot
+-- be answered through this one's route.
+SELECT * FROM raised_hand
+WHERE id = @id AND issue_id = @issue_id AND status = 'open';
+
+-- name: ListOpenHandsForIssue :many
+SELECT * FROM raised_hand
+WHERE issue_id = @issue_id AND status = 'open'
+ORDER BY created_at;
 
 -- name: GetRaisedHand :one
 SELECT * FROM raised_hand WHERE id = @id;
@@ -176,3 +193,15 @@ FROM raised_hand h
 WHERE h.workspace_id = @workspace_id AND h.referential_key IS NOT NULL
 GROUP BY h.referential_key
 ORDER BY 2 DESC;
+
+-- name: CountOpenHandsForIssue :one
+-- How many questions this unit is still parked on, EXCLUDING one.
+--
+-- The exclusion is what makes it usable inside AnswerHand: the hand being
+-- answered is already `answered` by the time this runs under the same
+-- transaction in some paths and not in others, and a count that depended on
+-- which would be a race. Naming the row to skip removes the question.
+SELECT COUNT(*) FROM raised_hand
+WHERE issue_id = @issue_id
+  AND status = 'open'
+  AND id <> @excluding_id;
