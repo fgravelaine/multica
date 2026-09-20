@@ -3247,6 +3247,9 @@ export class ApiClient {
       agent_id: string;
       title?: string;
       project_id?: string | null;
+      /** Bind the conversation to a unit, so the agent's brief carries the
+       *  issue and every question it is parked on. */
+      issue_id?: string | null;
     },
     workspaceSlug?: string,
   ): Promise<ChatSession> {

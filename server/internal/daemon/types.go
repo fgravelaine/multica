@@ -98,7 +98,10 @@ type Task struct {
 	// SPIKE: AcceptanceCriteria mirrors the claim payload's criteria for this
 	// issue, with the latest verdict on each. Absent on an issue with none, and
 	// from any server that predates them.
-	AcceptanceCriteria            []CriterionData        `json:"acceptance_criteria,omitempty"`
+	AcceptanceCriteria []CriterionData `json:"acceptance_criteria,omitempty"`
+	// SPIKE: the unit a chat is bound to, and the questions it is parked on.
+	// Nil on every other task kind.
+	DiscussionUnit                *DiscussionUnitData    `json:"discussion_unit,omitempty"`
 	ThreadName                    string                 `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
 	Agent                         *AgentData             `json:"agent,omitempty"`
 	ConnectedApps                 []ConnectedAppData     `json:"connected_apps,omitempty"` // per-run app capabilities mounted through runtime MCP overlays
@@ -336,4 +339,29 @@ type CriterionData struct {
 	Ruled     bool   `json:"ruled"`
 	Passed    bool   `json:"passed,omitempty"`
 	Evidence  string `json:"evidence,omitempty"`
+}
+
+// DiscussionUnitData mirrors the claim payload's unit-under-discussion for a
+// chat turn. See execenv.DiscussionUnitForEnv.
+type DiscussionUnitData struct {
+	Identifier string     `json:"identifier"`
+	Title      string     `json:"title"`
+	Status     string     `json:"status"`
+	Body       string     `json:"body,omitempty"`
+	Hands      []HandData `json:"hands,omitempty"`
+}
+
+type HandData struct {
+	Question       string           `json:"question"`
+	Options        []HandOptionData `json:"options"`
+	Recommendation string           `json:"recommendation,omitempty"`
+	Material       string           `json:"material,omitempty"`
+	Referential    string           `json:"referential,omitempty"`
+	Trigger        string           `json:"trigger,omitempty"`
+}
+
+type HandOptionData struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Cost  string `json:"cost"`
 }

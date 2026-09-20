@@ -217,6 +217,14 @@ type TaskContextForEnv struct {
 	// SPIKE: what this unit is verified against, with the latest verdict on
 	// each. Empty on an issue with no criteria, which renders no section.
 	AcceptanceCriteria []CriterionForEnv
+	// SPIKE: the unit a CHAT is about, and the questions it is parked on.
+	//
+	// A chat carries no work — that is the point of using one to decide a
+	// raised hand rather than the comment thread, where every message
+	// dispatches a work run against the issue brief. What it needs instead is
+	// enough to argue: what the unit is, and what it is waiting to be told.
+	// Empty on a chat bound to no issue, which renders no section.
+	DiscussionUnit *DiscussionUnitForEnv
 	// ConnectedApps lists per-run external app capabilities mounted through
 	// MCP overlays. Rendered briefly so the agent can map app names such as
 	// Notion to the actual MCP server name (`composio`).
@@ -252,6 +260,34 @@ type TaskContextForEnv struct {
 // Ruled is the two-state answer and Passed means nothing without it. Rendering
 // Passed alone would print "failed" against every criterion nobody has looked
 // at yet.
+// DiscussionUnitForEnv is the unit a chat session is bound to.
+type DiscussionUnitForEnv struct {
+	Identifier string
+	Title      string
+	Status     string
+	Body       string
+	Hands      []HandForEnv
+}
+
+// HandForEnv is one question the unit is parked on, with the cost of being
+// wrong on each side. The costs are carried, not summarised: they are the
+// field that lets a decision be taken in thirty seconds by someone who does
+// not hold the domain, and an agent asked to contest one needs them most.
+type HandForEnv struct {
+	Question       string
+	Options        []HandOptionForEnv
+	Recommendation string
+	Material       string
+	Referential    string
+	Trigger        string
+}
+
+type HandOptionForEnv struct {
+	Key   string
+	Label string
+	Cost  string
+}
+
 type CriterionForEnv struct {
 	Ordinal   int32
 	Statement string

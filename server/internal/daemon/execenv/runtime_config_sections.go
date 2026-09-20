@@ -481,6 +481,62 @@ func writeRepositories(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("\n")
 }
 
+// writeUnitUnderDiscussion renders the unit a CHAT is bound to, and what it is
+// parked on.
+//
+// This is the counterpart to writeAcceptanceCriteria, and it exists for the
+// opposite reason. Criteria tell an issue run what it will be judged against.
+// This tells a chat what is being argued about — and a chat is where a raised
+// hand gets contested, because the alternative was the comment thread, where
+// every message dispatches a work run and the agent arrives ready to do the
+// ticket instead of to disagree about the question.
+//
+// THE COSTS ARE RENDERED IN FULL. An option without the cost of being wrong on
+// its side is a poll, and an agent asked to contest a recommendation needs
+// exactly the thing the raiser thought it was risking.
+func writeUnitUnderDiscussion(b *strings.Builder, ctx TaskContextForEnv) {
+	unit := ctx.DiscussionUnit
+	if unit == nil {
+		return
+	}
+	b.WriteString("## The Unit Under Discussion\n\n")
+	fmt.Fprintf(b, "This conversation is about **%s — %s** (%s).\n\n",
+		unit.Identifier, unit.Title, unit.Status)
+	if body := strings.TrimSpace(unit.Body); body != "" {
+		b.WriteString("What it says:\n\n")
+		b.WriteString(body)
+		b.WriteString("\n\n")
+	}
+	if len(unit.Hands) == 0 {
+		b.WriteString("It is parked on no question. You are being asked about the unit itself.\n\n")
+		return
+	}
+	fmt.Fprintf(b, "It is parked on %d question(s), and it does not move until every one is answered.\n\n",
+		len(unit.Hands))
+	for i, hand := range unit.Hands {
+		fmt.Fprintf(b, "### %d. %s\n\n", i+1, hand.Question)
+		if m := strings.TrimSpace(hand.Material); m != "" {
+			fmt.Fprintf(b, "%s\n\n", m)
+		}
+		for _, opt := range hand.Options {
+			marker := ""
+			if opt.Key == hand.Recommendation {
+				marker = " — RECOMMENDED by whoever raised this"
+			}
+			fmt.Fprintf(b, "- **%s**%s\n  If wrong: %s\n", opt.Label, marker, opt.Cost)
+		}
+		b.WriteString("\n")
+		if hand.Referential != "" || hand.Trigger != "" {
+			fmt.Fprintf(b, "_Raised because: %s. The reference that failed to answer it: %s._\n\n",
+				hand.Trigger, hand.Referential)
+		}
+	}
+	b.WriteString("YOUR JOB HERE IS TO CONTEST, NOT TO COMPLY. The lead's job is to " +
+		"contest first, and the answer is often already in a reference — if it is, say which. " +
+		"You are not being asked to pick: you are being asked what the person deciding has not " +
+		"considered. Say so plainly, and say when you think the recommendation is right.\n\n")
+}
+
 // writeProjectContext emits the Project Context section when the task carries
 // an active project. Project context is independent of the task surface: an
 // issue inherits it from its project, while a chat receives it from the
@@ -1065,6 +1121,12 @@ func buildMetaSkillContentSlim(provider string, ctx TaskContextForEnv) string {
 	}
 
 	writeProjectContext(&b, ctx)
+
+	// SPIKE: chat only. An issue run already has the unit — it IS the unit —
+	// and quick-create has none.
+	if kind == kindChat {
+		writeUnitUnderDiscussion(&b, ctx)
+	}
 
 	if kind == kindIssue {
 		writeInstructionPrecedence(&b)

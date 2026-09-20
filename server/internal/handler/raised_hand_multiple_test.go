@@ -38,6 +38,13 @@ func handFixtureIssue(t *testing.T, status string) string {
 		t.Fatalf("seed issue: %v", err)
 	}
 	t.Cleanup(func() {
+		// Answering a hand POSTS A COMMENT — the decision has to reach the
+		// agent, and a comment is the channel it already reads. Leaving those
+		// behind made an unrelated task-message test fail at package level
+		// while passing alone, which is the shape of shared-database debt and
+		// costs whoever hits it an afternoon.
+		_, _ = testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, id)
+		_, _ = testPool.Exec(ctx, `DELETE FROM comment WHERE issue_id = $1`, id)
 		_, _ = testPool.Exec(ctx, `DELETE FROM raised_hand WHERE issue_id = $1`, id)
 		_, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, id)
 	})

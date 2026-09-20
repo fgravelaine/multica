@@ -354,6 +354,30 @@ type TaskIssueStatusData struct {
 // means nothing on its own; collapsing them would tell an agent that every
 // criterion nobody has looked at yet has FAILED, which is the most alarming
 // possible way to say "not checked".
+// TaskDiscussionUnitData is the unit a chat is about. See DiscussionUnitForEnv.
+type TaskDiscussionUnitData struct {
+	Identifier string         `json:"identifier"`
+	Title      string         `json:"title"`
+	Status     string         `json:"status"`
+	Body       string         `json:"body,omitempty"`
+	Hands      []TaskHandData `json:"hands,omitempty"`
+}
+
+type TaskHandData struct {
+	Question       string               `json:"question"`
+	Options        []TaskHandOptionData `json:"options"`
+	Recommendation string               `json:"recommendation,omitempty"`
+	Material       string               `json:"material,omitempty"`
+	Referential    string               `json:"referential,omitempty"`
+	Trigger        string               `json:"trigger,omitempty"`
+}
+
+type TaskHandOptionData struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Cost  string `json:"cost"`
+}
+
 type TaskCriterionData struct {
 	Ordinal   int32  `json:"ordinal"`
 	Statement string `json:"statement"`
@@ -410,6 +434,9 @@ type AgentTaskResponse struct {
 	// SPIKE: what this unit is verified against. Omitted when the issue has
 	// none, which an older daemon renders as no section at all.
 	AcceptanceCriteria []TaskCriterionData `json:"acceptance_criteria,omitempty"`
+	// SPIKE: the unit a CHAT is bound to, and the questions it is parked on.
+	// Nil on every other task kind, and on a chat about nothing in particular.
+	DiscussionUnit *TaskDiscussionUnitData `json:"discussion_unit,omitempty"`
 	// IssueStatusesOmitted is how many active custom statuses were dropped by
 	// the cap, so the brief can say the list is incomplete instead of
 	// presenting a truncated catalog as the whole one.

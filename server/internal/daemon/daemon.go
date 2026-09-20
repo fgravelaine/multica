@@ -7729,6 +7729,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		WorkspaceContext:                 task.WorkspaceContext,
 		IssueStatuses:                    convertIssueStatusesForEnv(task.IssueStatuses),
 		AcceptanceCriteria:               convertCriteriaForEnv(task.AcceptanceCriteria),
+		DiscussionUnit:                   convertDiscussionUnitForEnv(task.DiscussionUnit),
 		IssueStatusesOmitted:             task.IssueStatusesOmitted,
 		ConnectedApps:                    task.ConnectedApps,
 	}
@@ -10472,4 +10473,35 @@ func defaultArgsForProvider(cfg Config, provider string) []string {
 		return nil
 	}
 	return append([]string(nil), args...)
+}
+
+// convertDiscussionUnitForEnv maps the claim payload's unit-under-discussion
+// into the brief's shape. Nil in, nil out — a chat bound to no issue renders
+// no section.
+func convertDiscussionUnitForEnv(unit *DiscussionUnitData) *execenv.DiscussionUnitForEnv {
+	if unit == nil {
+		return nil
+	}
+	out := &execenv.DiscussionUnitForEnv{
+		Identifier: unit.Identifier,
+		Title:      unit.Title,
+		Status:     unit.Status,
+		Body:       unit.Body,
+	}
+	for _, hand := range unit.Hands {
+		entry := execenv.HandForEnv{
+			Question:       hand.Question,
+			Recommendation: hand.Recommendation,
+			Material:       hand.Material,
+			Referential:    hand.Referential,
+			Trigger:        hand.Trigger,
+		}
+		for _, o := range hand.Options {
+			entry.Options = append(entry.Options, execenv.HandOptionForEnv{
+				Key: o.Key, Label: o.Label, Cost: o.Cost,
+			})
+		}
+		out.Hands = append(out.Hands, entry)
+	}
+	return out
 }

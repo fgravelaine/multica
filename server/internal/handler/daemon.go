@@ -2907,6 +2907,26 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 			}
 		}
 		projectCtx.applyTo(&resp)
+
+		// SPIKE: the unit this conversation is about, when the session was
+		// bound to one. A chat carries no work, so what it needs instead is
+		// enough to argue: what the unit is and what it is waiting to be told.
+		//
+		// Degrades rather than refuses. A conversation that loses its context
+		// section is worse than one that has it and still better than a claim
+		// that fails — the agent can be told again, in a sentence, by the
+		// person talking to it.
+		if cs.IssueID.Valid {
+			if unit, uerr := h.loadDiscussionUnit(r.Context(), cs.IssueID, cs.WorkspaceID); uerr != nil {
+				slog.Warn("chat claim: failed to load the unit under discussion",
+					"task_id", uuidToString(task.ID),
+					"issue_id", uuidToString(cs.IssueID),
+					"error", uerr)
+			} else {
+				resp.DiscussionUnit = unit
+			}
+		}
+
 		if !task.ForceFreshSession && !task.ChannelContextRevision.Valid {
 			// Resume chat sessions only when the stored pointer was produced
 			// by the same runtime as the claiming task. When the chat_session
@@ -5816,4 +5836,48 @@ func (h *Handler) GetTaskGCCheck(w http.ResponseWriter, r *http.Request) {
 		"status":       task.Status,
 		"completed_at": task.CompletedAt.Time,
 	})
+}
+
+// loadDiscussionUnit reads the unit a chat session is bound to, and every
+// question it is parked on.
+//
+// The hands are read OPEN only. An answered one is history, and its decision is
+// already in the record the agent reads — putting it here would ask the agent
+// to re-argue something settled.
+func (h *Handler) loadDiscussionUnit(ctx context.Context, issueID, workspaceID pgtype.UUID) (*TaskDiscussionUnitData, error) {
+	issue, err := h.Queries.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{
+		ID:          issueID,
+		WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	prefix := h.getIssuePrefix(ctx, workspaceID)
+	unit := &TaskDiscussionUnitData{
+		Identifier: prefix + "-" + strconv.Itoa(int(issue.Number)),
+		Title:      issue.Title,
+		Status:     issue.Status,
+		Body:       issue.Description.String,
+	}
+	hands, herr := h.Queries.ListOpenHandsForIssue(ctx, issueID)
+	if herr != nil {
+		// The unit without its questions still beats no unit at all.
+		return unit, nil
+	}
+	for _, hand := range hands {
+		var opts []handOption
+		_ = json.Unmarshal(hand.Options, &opts)
+		entry := TaskHandData{
+			Question:       hand.Question,
+			Recommendation: hand.Recommendation.String,
+			Material:       hand.Material.String,
+			Referential:    hand.ReferentialKey.String,
+			Trigger:        hand.Trigger.String,
+		}
+		for _, o := range opts {
+			entry.Options = append(entry.Options, TaskHandOptionData{Key: o.Key, Label: o.Label, Cost: o.Cost})
+		}
+		unit.Hands = append(unit.Hands, entry)
+	}
+	return unit, nil
 }

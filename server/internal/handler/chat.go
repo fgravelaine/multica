@@ -35,6 +35,10 @@ type CreateChatSessionRequest struct {
 	AgentID   string  `json:"agent_id"`
 	Title     string  `json:"title"`
 	ProjectID *string `json:"project_id"`
+	// IssueID binds the conversation to a unit, so the agent's brief carries
+	// the issue and its open raised hands. Optional: a chat about nothing in
+	// particular is the ordinary case and stays that way.
+	IssueID *string `json:"issue_id"`
 }
 
 func (h *Handler) CreateChatSession(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +69,25 @@ func (h *Handler) CreateChatSession(w http.ResponseWriter, r *http.Request) {
 	if req.ProjectID != nil && strings.TrimSpace(*req.ProjectID) != "" {
 		projectID, ok = parseUUIDOrBadRequest(w, strings.TrimSpace(*req.ProjectID), "project_id")
 		if !ok {
+			return
+		}
+	}
+	// SPIKE: the unit this conversation is about. Deciding a raised hand is a
+	// conversation, and the only surface that carried the unit was the comment
+	// thread — where every message dispatches a work run against the issue
+	// brief. Verified against the workspace here rather than at claim time, so
+	// a bad id is a 404 on the session you just tried to open.
+	issueID := pgtype.UUID{Valid: false}
+	if req.IssueID != nil && strings.TrimSpace(*req.IssueID) != "" {
+		issueID, ok = parseUUIDOrBadRequest(w, strings.TrimSpace(*req.IssueID), "issue_id")
+		if !ok {
+			return
+		}
+		if _, ierr := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
+			ID:          issueID,
+			WorkspaceID: workspaceUUID,
+		}); ierr != nil {
+			writeError(w, http.StatusNotFound, "issue not found")
 			return
 		}
 	}
@@ -133,6 +156,7 @@ func (h *Handler) CreateChatSession(w http.ResponseWriter, r *http.Request) {
 		CreatorID:   parseUUID(userID),
 		Title:       req.Title,
 		ProjectID:   projectID,
+		IssueID:     issueID,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create chat session")
@@ -201,6 +225,7 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 				AgentID:     uuidToString(s.AgentID),
 				CreatorID:   uuidToString(s.CreatorID),
 				ProjectID:   uuidToPtr(s.ProjectID),
+				IssueID:     uuidToPtr(s.IssueID),
 				Title:       s.Title,
 				Status:      s.Status,
 				HasUnread:   s.UnreadCount > 0,
@@ -231,6 +256,7 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 				AgentID:     uuidToString(s.AgentID),
 				CreatorID:   uuidToString(s.CreatorID),
 				ProjectID:   uuidToPtr(s.ProjectID),
+				IssueID:     uuidToPtr(s.IssueID),
 				Title:       s.Title,
 				Status:      s.Status,
 				HasUnread:   s.UnreadCount > 0,
@@ -1913,8 +1939,12 @@ type ChatSessionResponse struct {
 	AgentID     string  `json:"agent_id"`
 	CreatorID   string  `json:"creator_id"`
 	ProjectID   *string `json:"project_id"`
-	Title       string  `json:"title"`
-	Status      string  `json:"status"`
+	// IssueID is the unit this conversation is about, when it was bound to
+	// one. Emitted so a surface can show it — a binding nobody can see is a
+	// binding that surprises whoever wonders why the agent knows the ticket.
+	IssueID *string `json:"issue_id"`
+	Title   string  `json:"title"`
+	Status  string  `json:"status"`
 	// Only populated by list endpoints — single-session fetches return 0/false/nil.
 	// HasUnread is kept as a convenience (== UnreadCount > 0) for existing consumers.
 	HasUnread   bool             `json:"has_unread"`
@@ -2030,6 +2060,7 @@ func chatSessionToResponse(s db.ChatSession) ChatSessionResponse {
 		AgentID:     uuidToString(s.AgentID),
 		CreatorID:   uuidToString(s.CreatorID),
 		ProjectID:   uuidToPtr(s.ProjectID),
+		IssueID:     uuidToPtr(s.IssueID),
 		Title:       s.Title,
 		Status:      s.Status,
 		Pinned:      s.PinnedAt.Valid,

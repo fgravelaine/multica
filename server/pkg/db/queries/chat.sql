@@ -1,7 +1,12 @@
 -- name: CreateChatSession :one
-INSERT INTO chat_session (workspace_id, agent_id, creator_id, title, runtime_id, is_agent_intro, project_id, id)
-VALUES ($1, $2, $3, $4, (SELECT runtime_id FROM agent WHERE id = $2), $5, sqlc.narg('project_id'), COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()))
+INSERT INTO chat_session (workspace_id, agent_id, creator_id, title, runtime_id, is_agent_intro, project_id, issue_id, id)
+VALUES ($1, $2, $3, $4, (SELECT runtime_id FROM agent WHERE id = $2), $5, sqlc.narg('project_id'), sqlc.narg('issue_id'), COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()))
 RETURNING *;
+
+-- name: ClearChatSessionIssue :exec
+-- The issue reference is soft, like the project one. A deleted issue costs the
+-- conversation its context selection, never its history.
+UPDATE chat_session SET issue_id = NULL WHERE issue_id = @issue_id;
 
 -- name: ClearChatSessionProjectByProject :exec
 -- Project references are intentionally soft (no database FK). Keep chat
