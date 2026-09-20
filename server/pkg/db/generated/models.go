@@ -898,19 +898,20 @@ type IssueSourceContextObjectIntent struct {
 }
 
 type IssueStatus struct {
-	ID          pgtype.UUID        `json:"id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	Key         string             `json:"key"`
-	Name        string             `json:"name"`
-	Description string             `json:"description"`
-	Category    string             `json:"category"`
-	Color       string             `json:"color"`
-	IsSystem    bool               `json:"is_system"`
-	Position    float64            `json:"position"`
-	ArchivedAt  pgtype.Timestamptz `json:"archived_at"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-	Icon        string             `json:"icon"`
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	Key              string             `json:"key"`
+	Name             string             `json:"name"`
+	Description      string             `json:"description"`
+	Category         string             `json:"category"`
+	Color            string             `json:"color"`
+	IsSystem         bool               `json:"is_system"`
+	Position         float64            `json:"position"`
+	ArchivedAt       pgtype.Timestamptz `json:"archived_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	Icon             string             `json:"icon"`
+	RequiresQuestion bool               `json:"requires_question"`
 }
 
 type IssueSubscriber struct {

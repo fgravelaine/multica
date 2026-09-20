@@ -13,6 +13,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"strconv"
 )
 
 // SPIKE (not upstream): what has the right to say no at a rung, and who accepts
@@ -539,4 +540,53 @@ func (h *Handler) SetLevelGate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, levelGateToEntry(gate))
+}
+
+// questionRequiredRefusal keeps a question behind a status that exists for one.
+//
+// `needs discussion` means, in the team's own contract, "not startable until a
+// consultation resolves it". Nothing recorded what the consultation was ABOUT,
+// so the status was a label: measured 2026-09-20, five issues sat in it
+// carrying no question at all, the oldest since 2026-09-10, and there was
+// nowhere for one to go.
+//
+// A raised hand is that somewhere — bounded options, the cost of being wrong on
+// each side, a recipient. So the two stop being the same idea written twice:
+// the status is where a unit waits, the hand is what it waits FOR.
+//
+// WHICH status this is, is the workspace's to say (migration 492). Naming a key
+// here would weld one team's vocabulary into the product — `needs_discussion`
+// is not a built-in, it is a custom status this workspace created.
+//
+// THE ORDER IS ASK, THEN MOVE, and it is not arbitrary. Raising a hand parks
+// the unit, so a unit moved into the status first would be pulled straight back
+// out by the raise. The message says so rather than leaving it to be found.
+//
+// Only the ENTRY is guarded. Leaving is always open, exactly as rule 3 of the
+// rung's gates has it — a unit that turns out not to need the consultation must
+// not need one to escape it.
+func (h *Handler) questionRequiredRefusal(ctx context.Context, issue db.Issue, targetStatus string) string {
+	if targetStatus == "" || targetStatus == issue.Status {
+		return ""
+	}
+	entry, err := h.Queries.GetIssueStatusEntryByKey(ctx, db.GetIssueStatusEntryByKeyParams{
+		WorkspaceID: issue.WorkspaceID,
+		Key:         targetStatus,
+	})
+	if err != nil || !entry.RequiresQuestion {
+		return ""
+	}
+	open, herr := h.Queries.ListOpenHandsForIssue(ctx, issue.ID)
+	if herr != nil {
+		// Fails OPEN, unlike the rung's gates. Those refuse because a ratifier
+		// said no; this one would refuse because a COUNT failed, and a lookup
+		// error must not read as "you have not asked your question".
+		return ""
+	}
+	if len(open) > 0 {
+		return ""
+	}
+	return strconv.Quote(entry.Name) + " is where a unit waits for an answer, so it needs a question: " +
+		"raise a hand on this issue first, then move it. A status with nothing behind it is how five " +
+		"issues ended up sitting here carrying no question at all."
 }

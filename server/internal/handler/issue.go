@@ -3514,6 +3514,13 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			writeLevelGateRefusal(w, refusal)
 			return
 		}
+		// SPIKE: a status may require an open question (migration 492). Checked
+		// beside the rung's gates and for the same reason — before any field is
+		// applied and before the transaction opens.
+		if refusal := h.questionRequiredRefusal(r.Context(), prevIssue, statusKey); refusal != "" {
+			writeLevelGateRefusal(w, refusal)
+			return
+		}
 		statusKeyForGuard = statusKey
 		params.Status = pgtype.Text{String: statusKey, Valid: true}
 	}
@@ -4307,6 +4314,10 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			// reason is exactly the silent-degradation shape §"What was NOT
 			// done" already complains about elsewhere. The skip is kept, and
 			// the reason is carried out in the response.
+			if refusal := h.questionRequiredRefusal(r.Context(), prevIssue, batchStatusKey); refusal != "" {
+				writeLevelGateRefusal(w, refusal)
+				return
+			}
 			if refusal := h.checkLevelGate(r.Context(), prevIssue, batchStatusKey, batchActorType, batchActorID); refusal != "" {
 				gateRefusals = append(gateRefusals, map[string]string{
 					"issue_id": uuidToString(prevIssue.ID),

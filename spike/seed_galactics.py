@@ -47,9 +47,18 @@ import urllib.request
 GATED_RUNGS = ["objective", "task"]
 
 STATUSES = [
-    # (name, category). `qa` sits after in_review and before done.
-    ("QA", "started"),
-    ("Needs discussion", "unstarted"),
+    # (name, category, requires_question).
+    #
+    # `qa` sits after in_review and before done.
+    #
+    # `needs discussion` REQUIRES A QUESTION. The contract calls it "not
+    # startable until a consultation resolves it", and nothing recorded what
+    # the consultation was about — measured on a mirrored backlog, five issues
+    # sat in it and zero carried a question. The flag makes the status refuse a
+    # unit with no open raised hand (migration 492). Ask first, then move: the
+    # raise parks the unit, so moving it in first would pull it straight out.
+    ("QA", "started", False),
+    ("Needs discussion", "unstarted", True),
 ]
 
 
@@ -134,14 +143,25 @@ def parse_persona(path):
 
 def seed_statuses(api, log):
     existing = {s["key"]: s for s in Api.rows(api.call("GET", "/api/issue-statuses"), "statuses")}
-    for name, category in STATUSES:
+    for name, category, needs_question in STATUSES:
         key = name.lower().replace(" ", "_")
         if key in existing:
-            log(f"  status {key:18} already there")
+            # Present is not the same as configured. A status seeded before the
+            # flag existed is here and wrong, and skipping it is how the two
+            # drift — the same reason an agent is updated rather than skipped.
+            if bool(existing[key].get("requires_question")) != needs_question:
+                api.call("PATCH", f"/api/issue-statuses/{existing[key]['id']}",
+                         {"requires_question": needs_question})
+                log(f"  status {key:18} requires_question -> {needs_question}")
+            else:
+                log(f"  status {key:18} already there")
             continue
         created = api.call("POST", "/api/issue-statuses", {
             "name": name, "category": category, "color": "#7d8a91",
         })
+        if needs_question:
+            api.call("PATCH", f"/api/issue-statuses/{created['id']}",
+                     {"requires_question": True})
         log(f"  status {created['key']:18} created")
         existing[created["key"]] = created
     return existing

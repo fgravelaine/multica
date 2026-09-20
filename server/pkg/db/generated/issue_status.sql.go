@@ -20,7 +20,7 @@ WHERE id = $1::uuid
   AND workspace_id = $2::uuid
   AND is_system = FALSE
   AND archived_at IS NULL
-RETURNING id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon
+RETURNING id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon, requires_question
 `
 
 type ArchiveIssueStatusEntryParams struct {
@@ -51,6 +51,7 @@ func (q *Queries) ArchiveIssueStatusEntry(ctx context.Context, arg ArchiveIssueS
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Icon,
+		&i.RequiresQuestion,
 	)
 	return i, err
 }
@@ -92,7 +93,7 @@ VALUES (
         0
     )
 )
-RETURNING id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon
+RETURNING id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon, requires_question
 `
 
 type CreateIssueStatusEntryParams struct {
@@ -132,6 +133,7 @@ func (q *Queries) CreateIssueStatusEntry(ctx context.Context, arg CreateIssueSta
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Icon,
+		&i.RequiresQuestion,
 	)
 	return i, err
 }
@@ -147,7 +149,7 @@ func (q *Queries) DeleteIssueStatusEntriesForWorkspace(ctx context.Context, work
 }
 
 const getIssueStatusEntryByID = `-- name: GetIssueStatusEntryByID :one
-SELECT id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon FROM issue_status
+SELECT id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon, requires_question FROM issue_status
 WHERE id = $1::uuid
   AND workspace_id = $2::uuid
 `
@@ -174,12 +176,13 @@ func (q *Queries) GetIssueStatusEntryByID(ctx context.Context, arg GetIssueStatu
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Icon,
+		&i.RequiresQuestion,
 	)
 	return i, err
 }
 
 const getIssueStatusEntryByKey = `-- name: GetIssueStatusEntryByKey :one
-SELECT id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon FROM issue_status
+SELECT id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon, requires_question FROM issue_status
 WHERE workspace_id = $1::uuid
   AND key = $2::text
 `
@@ -206,12 +209,13 @@ func (q *Queries) GetIssueStatusEntryByKey(ctx context.Context, arg GetIssueStat
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Icon,
+		&i.RequiresQuestion,
 	)
 	return i, err
 }
 
 const listActiveCustomIssueStatusEntries = `-- name: ListActiveCustomIssueStatusEntries :many
-SELECT id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon FROM issue_status
+SELECT id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon, requires_question FROM issue_status
 WHERE workspace_id = $1::uuid
   AND issue_status_category(category) = $2::text
   AND is_system = FALSE
@@ -250,6 +254,7 @@ func (q *Queries) ListActiveCustomIssueStatusEntries(ctx context.Context, arg Li
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Icon,
+			&i.RequiresQuestion,
 		); err != nil {
 			return nil, err
 		}
@@ -262,7 +267,7 @@ func (q *Queries) ListActiveCustomIssueStatusEntries(ctx context.Context, arg Li
 }
 
 const listIssueStatusEntries = `-- name: ListIssueStatusEntries :many
-SELECT id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon FROM issue_status
+SELECT id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon, requires_question FROM issue_status
 WHERE workspace_id = $1::uuid
   AND ($2::bool OR archived_at IS NULL)
 ORDER BY
@@ -312,6 +317,7 @@ func (q *Queries) ListIssueStatusEntries(ctx context.Context, arg ListIssueStatu
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Icon,
+			&i.RequiresQuestion,
 		); err != nil {
 			return nil, err
 		}
@@ -463,22 +469,27 @@ UPDATE issue_status SET
     color = COALESCE($3, color),
     icon = COALESCE($4, icon),
     position = COALESCE($5, position),
+    -- Whether a unit sitting in this status must carry an open question.
+    -- Migration 492. Omitting the key leaves the flag alone, like every field
+    -- above it, so a rename cannot silently clear a gate.
+    requires_question = COALESCE($6, requires_question),
     updated_at = now()
-WHERE id = $6::uuid
-  AND workspace_id = $7::uuid
+WHERE id = $7::uuid
+  AND workspace_id = $8::uuid
   AND is_system = FALSE
   AND archived_at IS NULL
-RETURNING id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon
+RETURNING id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon, requires_question
 `
 
 type UpdateIssueStatusEntryParams struct {
-	Name        pgtype.Text   `json:"name"`
-	Description pgtype.Text   `json:"description"`
-	Color       pgtype.Text   `json:"color"`
-	Icon        pgtype.Text   `json:"icon"`
-	Position    pgtype.Float8 `json:"position"`
-	ID          pgtype.UUID   `json:"id"`
-	WorkspaceID pgtype.UUID   `json:"workspace_id"`
+	Name             pgtype.Text   `json:"name"`
+	Description      pgtype.Text   `json:"description"`
+	Color            pgtype.Text   `json:"color"`
+	Icon             pgtype.Text   `json:"icon"`
+	Position         pgtype.Float8 `json:"position"`
+	RequiresQuestion pgtype.Bool   `json:"requires_question"`
+	ID               pgtype.UUID   `json:"id"`
+	WorkspaceID      pgtype.UUID   `json:"workspace_id"`
 }
 
 // key and category are absent on purpose: both are immutable after create.
@@ -491,6 +502,7 @@ func (q *Queries) UpdateIssueStatusEntry(ctx context.Context, arg UpdateIssueSta
 		arg.Color,
 		arg.Icon,
 		arg.Position,
+		arg.RequiresQuestion,
 		arg.ID,
 		arg.WorkspaceID,
 	)
@@ -509,6 +521,7 @@ func (q *Queries) UpdateIssueStatusEntry(ctx context.Context, arg UpdateIssueSta
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Icon,
+		&i.RequiresQuestion,
 	)
 	return i, err
 }

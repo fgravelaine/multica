@@ -37,9 +37,13 @@ type IssueStatusResponse struct {
 	Icon        string  `json:"icon"`
 	IsSystem    bool    `json:"is_system"`
 	Position    float64 `json:"position"`
-	ArchivedAt  *string `json:"archived_at"`
-	CreatedAt   string  `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
+	// A unit may not enter this status without an open raised hand. The flag
+	// is emitted, not only accepted — a gate nobody can read is a gate that
+	// surprises whoever hits it.
+	RequiresQuestion bool    `json:"requires_question"`
+	ArchivedAt       *string `json:"archived_at"`
+	CreatedAt        string  `json:"created_at"`
+	UpdatedAt        string  `json:"updated_at"`
 }
 
 // terminalIssueStatusKeys resolves the concrete status keys whose categories
@@ -55,19 +59,20 @@ func (h *Handler) terminalIssueStatusKeys(ctx context.Context, workspaceID pgtyp
 func issueStatusToResponse(s db.IssueStatus) IssueStatusResponse {
 	category := issuestatus.WireCategory(s.Key, s.Category)
 	return IssueStatusResponse{
-		ID:          uuidToString(s.ID),
-		WorkspaceID: uuidToString(s.WorkspaceID),
-		Key:         s.Key,
-		Name:        s.Name,
-		Description: s.Description,
-		Category:    category,
-		Color:       s.Color,
-		Icon:        s.Icon,
-		IsSystem:    s.IsSystem,
-		Position:    s.Position,
-		ArchivedAt:  timestampToPtr(s.ArchivedAt),
-		CreatedAt:   timestampToString(s.CreatedAt),
-		UpdatedAt:   timestampToString(s.UpdatedAt),
+		ID:               uuidToString(s.ID),
+		WorkspaceID:      uuidToString(s.WorkspaceID),
+		Key:              s.Key,
+		Name:             s.Name,
+		Description:      s.Description,
+		Category:         category,
+		Color:            s.Color,
+		Icon:             s.Icon,
+		IsSystem:         s.IsSystem,
+		Position:         s.Position,
+		RequiresQuestion: s.RequiresQuestion,
+		ArchivedAt:       timestampToPtr(s.ArchivedAt),
+		CreatedAt:        timestampToString(s.CreatedAt),
+		UpdatedAt:        timestampToString(s.UpdatedAt),
 	}
 }
 
@@ -91,6 +96,9 @@ type UpdateIssueStatusRequest struct {
 	Color       *string  `json:"color"`
 	Icon        *string  `json:"icon"`
 	Position    *float64 `json:"position"`
+	// RequiresQuestion makes this status refuse a unit that carries no open
+	// raised hand — see questionRequiredRefusal. Nil leaves it as it is.
+	RequiresQuestion *bool `json:"requires_question"`
 }
 
 // ListIssueStatuses returns the workspace's status catalog in display order.
@@ -351,6 +359,12 @@ func (h *Handler) UpdateIssueStatus(w http.ResponseWriter, r *http.Request) {
 		Color:       color,
 		Icon:        icon,
 		Position:    position,
+		RequiresQuestion: func() pgtype.Bool {
+			if req.RequiresQuestion == nil {
+				return pgtype.Bool{}
+			}
+			return pgtype.Bool{Bool: *req.RequiresQuestion, Valid: true}
+		}(),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

@@ -81,6 +81,10 @@ UPDATE issue_status SET
     color = COALESCE(sqlc.narg('color'), color),
     icon = COALESCE(sqlc.narg('icon'), icon),
     position = COALESCE(sqlc.narg('position'), position),
+    -- Whether a unit sitting in this status must carry an open question.
+    -- Migration 492. Omitting the key leaves the flag alone, like every field
+    -- above it, so a rename cannot silently clear a gate.
+    requires_question = COALESCE(sqlc.narg('requires_question'), requires_question),
     updated_at = now()
 WHERE id = sqlc.arg('id')::uuid
   AND workspace_id = sqlc.arg('workspace_id')::uuid
