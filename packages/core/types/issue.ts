@@ -281,6 +281,8 @@ export interface RaisedHand {
   /** Why the hand went up, from a closed set of three. */
   trigger?: "block" | "three_failures" | "contradiction";
   recipient_type?: "lead" | "human";
+  /** The lead this hand is addressed to, when it is addressed to one. */
+  recipient_id?: string;
   /**
    * Answer only. How many hands on this issue are STILL open after this one.
    * A unit resumes when the last is answered, so a non-zero value means the
@@ -289,4 +291,18 @@ export interface RaisedHand {
   still_open?: number;
   /** Answer only. Whether this answer put the unit back on the board. */
   resumed?: boolean;
+}
+
+
+// SPIKE (not upstream): one body of knowledge a raised hand can interrogate.
+//
+// `owner_agent_id` is what lets a surface answer "which agent is concerned by
+// this question" without guessing from its words: the hand names the reference
+// that failed, and the reference names whose it is.
+export interface Referential {
+  key: string;
+  name: string;
+  description: string;
+  is_system: boolean;
+  owner_agent_id?: string | null;
 }

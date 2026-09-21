@@ -1283,16 +1283,17 @@ type RaisedHand struct {
 }
 
 type Referential struct {
-	ID          pgtype.UUID        `json:"id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	Key         string             `json:"key"`
-	Name        string             `json:"name"`
-	Description string             `json:"description"`
-	IsSystem    bool               `json:"is_system"`
-	Position    float64            `json:"position"`
-	ArchivedAt  pgtype.Timestamptz `json:"archived_at"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	ID           pgtype.UUID        `json:"id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	Key          string             `json:"key"`
+	Name         string             `json:"name"`
+	Description  string             `json:"description"`
+	IsSystem     bool               `json:"is_system"`
+	Position     float64            `json:"position"`
+	ArchivedAt   pgtype.Timestamptz `json:"archived_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	OwnerAgentID pgtype.UUID        `json:"owner_agent_id"`
 }
 
 type ReferentialEntry struct {

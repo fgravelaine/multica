@@ -224,6 +224,7 @@ import type {
   RaisedHand,
   AcceptanceCriterion,
   LevelGate,
+  Referential,
   MissionResponse,
   MissionBoardResponse,
   MissionBlocker,
@@ -4480,6 +4481,19 @@ export class ApiClient {
   // every issue, so a per-issue request would be a fan-out for nothing.
   async listLevelGates(): Promise<{ gates: LevelGate[] }> {
     return this.fetch<{ gates: LevelGate[] }>(`/api/level-gates`);
+  }
+
+  // SPIKE (not upstream): the referential vocabulary, with who owns each one.
+  async listReferentials(): Promise<Referential[]> {
+    const out = await this.fetch<{ referentials: Referential[] }>(`/api/referentials`);
+    return out.referentials ?? [];
+  }
+
+  async setReferentialOwner(key: string, ownerAgentId: string | null): Promise<Referential> {
+    return this.fetch<Referential>(`/api/referentials/${key}/owner`, {
+      method: "PUT",
+      body: JSON.stringify({ owner_agent_id: ownerAgentId ?? "" }),
+    });
   }
 
   // SPIKE (not upstream): the mission view. ONE request for the whole tree —

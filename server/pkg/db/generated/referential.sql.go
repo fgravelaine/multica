@@ -12,7 +12,7 @@ import (
 )
 
 const getReferentialByKey = `-- name: GetReferentialByKey :one
-SELECT id, workspace_id, key, name, description, is_system, position, archived_at, created_at, updated_at FROM referential
+SELECT id, workspace_id, key, name, description, is_system, position, archived_at, created_at, updated_at, owner_agent_id FROM referential
 WHERE workspace_id = $1 AND key = $2 AND archived_at IS NULL
 `
 
@@ -38,12 +38,13 @@ func (q *Queries) GetReferentialByKey(ctx context.Context, arg GetReferentialByK
 		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerAgentID,
 	)
 	return i, err
 }
 
 const listReferentials = `-- name: ListReferentials :many
-SELECT id, workspace_id, key, name, description, is_system, position, archived_at, created_at, updated_at FROM referential
+SELECT id, workspace_id, key, name, description, is_system, position, archived_at, created_at, updated_at, owner_agent_id FROM referential
 WHERE workspace_id = $1
   AND ($2::bool OR archived_at IS NULL)
 ORDER BY position, key
@@ -74,6 +75,7 @@ func (q *Queries) ListReferentials(ctx context.Context, arg ListReferentialsPara
 			&i.ArchivedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OwnerAgentID,
 		); err != nil {
 			return nil, err
 		}
@@ -111,4 +113,41 @@ ON CONFLICT DO NOTHING
 func (q *Queries) SeedReferentials(ctx context.Context, workspaceID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, seedReferentials, workspaceID)
 	return err
+}
+
+const setReferentialOwner = `-- name: SetReferentialOwner :one
+UPDATE referential
+SET owner_agent_id = $1, updated_at = now()
+WHERE workspace_id = $2 AND key = $3
+RETURNING id, workspace_id, key, name, description, is_system, position, archived_at, created_at, updated_at, owner_agent_id
+`
+
+type SetReferentialOwnerParams struct {
+	OwnerAgentID pgtype.UUID `json:"owner_agent_id"`
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	Key          string      `json:"key"`
+}
+
+// Who holds this body of knowledge. NULL clears it.
+//
+// The owner is what turns "which agent is concerned by this question" from a
+// guess into a lookup: the hand names the reference that failed, and the
+// reference names whose it is.
+func (q *Queries) SetReferentialOwner(ctx context.Context, arg SetReferentialOwnerParams) (Referential, error) {
+	row := q.db.QueryRow(ctx, setReferentialOwner, arg.OwnerAgentID, arg.WorkspaceID, arg.Key)
+	var i Referential
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Key,
+		&i.Name,
+		&i.Description,
+		&i.IsSystem,
+		&i.Position,
+		&i.ArchivedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OwnerAgentID,
+	)
+	return i, err
 }

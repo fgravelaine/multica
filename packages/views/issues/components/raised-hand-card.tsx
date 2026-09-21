@@ -68,7 +68,7 @@ export function RaisedHandCard({ issueId }: { issueId: string }) {
           The unit stays parked until every one is answered.
         </p>
       ) : null}
-      <DiscussWithAgent issueId={issueId} />
+      <DiscussWithAgent issueId={issueId} hands={open} />
 
       {open.map((hand: RaisedHand) => (
         <HandBlock
@@ -96,7 +96,7 @@ export function RaisedHandCard({ issueId }: { issueId: string }) {
 // hand with its costs, and the instruction to contest rather than comply. The
 // conversation is the lead's job in `raised-hand.md` — "contest first, the
 // answer is often already in a reference".
-function DiscussWithAgent({ issueId }: { issueId: string }) {
+function DiscussWithAgent({ issueId, hands }: { issueId: string; hands: RaisedHand[] }) {
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
   const [agentId, setAgentId] = useState("");
@@ -104,6 +104,10 @@ function DiscussWithAgent({ issueId }: { issueId: string }) {
   const { data: agents } = useQuery({
     queryKey: ["agents", "for-discussion"],
     queryFn: () => api.listAgents(),
+  });
+  const { data: referentials } = useQuery({
+    queryKey: ["referentials"],
+    queryFn: () => api.listReferentials(),
   });
 
   const start = useMutation({
@@ -114,6 +118,32 @@ function DiscussWithAgent({ issueId }: { issueId: string }) {
 
   const roster = (agents ?? []).filter((a: Agent) => !a.archived_at);
   if (roster.length === 0) return null;
+
+  // WHO IS CONCERNED IS DERIVED, NEVER GUESSED FROM THE QUESTION'S WORDS.
+  //
+  // Each open hand names the body of knowledge that failed to answer it, and
+  // each body of knowledge may name the agent who holds it. That is the whole
+  // chain, and it is the model's own: a category of question earns an agent,
+  // and the agent then owns the category.
+  //
+  // A hand addressed to a lead puts that lead here too — it is the agent the
+  // model says should contest first.
+  const ownerByKey = new Map(
+    (referentials ?? [])
+      .filter((ref) => ref.owner_agent_id)
+      .map((ref) => [ref.key, ref.owner_agent_id as string]),
+  );
+  const concernedIds = new Set<string>();
+  for (const hand of hands) {
+    const owner = hand.referential ? ownerByKey.get(hand.referential) : undefined;
+    if (owner) concernedIds.add(owner);
+    if (hand.recipient_type === "lead" && hand.recipient_id) {
+      concernedIds.add(hand.recipient_id);
+    }
+  }
+
+  const concerned = roster.filter((a: Agent) => concernedIds.has(a.id));
+  const rest = roster.filter((a: Agent) => !concernedIds.has(a.id));
 
   return (
     <div className="mb-3 flex items-center gap-2">
@@ -130,11 +160,33 @@ function DiscussWithAgent({ issueId }: { issueId: string }) {
         className="rounded-md border bg-transparent px-2 py-0.5 text-caption text-muted-foreground transition-colors hover:border-foreground/20 disabled:opacity-60"
       >
         <option value="">Talk it through with…</option>
-        {roster.map((a: Agent) => (
-          <option key={a.id} value={a.id}>
-            {a.name}
-          </option>
-        ))}
+        {/* Grouped rather than merely sorted: "concerned" is a claim about
+            WHY this agent is here, and a list that only reorders makes the
+            reader guess which ones those were. */}
+        {concerned.length > 0 ? (
+          <optgroup label="Holds a reference this question failed against">
+            {concerned.map((a: Agent) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </optgroup>
+        ) : null}
+        {concerned.length > 0 ? (
+          <optgroup label="Everyone else">
+            {rest.map((a: Agent) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </optgroup>
+        ) : (
+          rest.map((a: Agent) => (
+            <option key={a.id} value={a.id}>
+              {a.name}
+            </option>
+          ))
+        )}
       </select>
       {start.isPending ? (
         <span className="text-caption text-muted-foreground">opening…</span>

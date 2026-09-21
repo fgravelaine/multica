@@ -46,6 +46,26 @@ import urllib.request
 # is levels.md's own "there is no T4 above the ticket", not a shortcut here.
 GATED_RUNGS = ["objective", "task"]
 
+# Who holds each body of knowledge. A raised hand names the referential that
+# failed to answer it, so this is what turns "which agent is concerned by this
+# question" from a guess into a lookup.
+#
+# THE MAPPING IS THE TEAM'S, NOT THE PRODUCT'S. Multica stores an owner and
+# says nothing about who it should be; that `design_system` is Sabine's is a
+# fact about THIS roster, and it belongs in the seeder beside everything else
+# read out of agents/*.md.
+#
+# `unclassified` is deliberately unowned: it means the raiser could not tell
+# which reference was thin, and giving that an owner would route every
+# unclassifiable question to one desk.
+REFERENTIAL_OWNERS = {
+    "design_system": "Sabine Wren",
+    "brand_register": "Sabine Wren",
+    "architecture": "Galen Erso",
+    "api_contract": "Galen Erso",
+    "product_direction": "Obi-Wan Kenobi",
+}
+
 STATUSES = [
     # (name, category, requires_question).
     #
@@ -265,6 +285,29 @@ def seed_gates(api, statuses, agents, log):
         log(f"  gates  {rung:18} in_review→human, qa→AP-5")
 
 
+def seed_referential_owners(api, agents, log):
+    """Name the agent who holds each body of knowledge.
+
+    Reads the catalog rather than assuming it: the referentials are seeded
+    lazily by the product on first read, and a key this script does not
+    recognise is left alone rather than cleared.
+    """
+    entries = {e["key"]: e for e in Api.rows(api.call("GET", "/api/referentials"), "referentials")}
+    for key, owner_name in REFERENTIAL_OWNERS.items():
+        if key not in entries:
+            log(f"  ref    {key:18} SKIPPED — not in this workspace's catalog")
+            continue
+        owner = agents.get(owner_name)
+        if not owner:
+            log(f"  ref    {key:18} SKIPPED — no agent named {owner_name}")
+            continue
+        if entries[key].get("owner_agent_id") == owner["id"]:
+            log(f"  ref    {key:18} already {owner_name}")
+            continue
+        api.call("PUT", f"/api/referentials/{key}/owner", {"owner_agent_id": owner["id"]})
+        log(f"  ref    {key:18} owner -> {owner_name}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--galactic", default=os.path.expanduser(
@@ -301,6 +344,7 @@ def main():
     agents = seed_agents(api, personas, args.runtime_id, log)
     seed_squads(api, personas, agents, log)
     seed_gates(api, statuses, agents, log)
+    seed_referential_owners(api, agents, log)
     log("Done.")
 
 

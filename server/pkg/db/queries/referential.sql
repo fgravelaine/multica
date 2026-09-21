@@ -32,3 +32,14 @@ ORDER BY position, key;
 -- hands that already name it keep resolving for display through ListReferentials.
 SELECT * FROM referential
 WHERE workspace_id = @workspace_id AND key = @key AND archived_at IS NULL;
+
+-- name: SetReferentialOwner :one
+-- Who holds this body of knowledge. NULL clears it.
+--
+-- The owner is what turns "which agent is concerned by this question" from a
+-- guess into a lookup: the hand names the reference that failed, and the
+-- reference names whose it is.
+UPDATE referential
+SET owner_agent_id = sqlc.narg('owner_agent_id'), updated_at = now()
+WHERE workspace_id = @workspace_id AND key = @key
+RETURNING *;
