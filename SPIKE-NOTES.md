@@ -4,6 +4,10 @@ Throwaway fork. Not a contribution. Nothing here is written for a maintainer.
 
 Upstream at fork point: `cf52ba33c` (2026-09-14).
 
+Sections 1–27 cover the ladder, the gates and the verify beat, to 2026-09-18.
+28–35 cover the mirror and what running the team's own backlog through it found,
+to 2026-09-21.
+
 ---
 
 ## Where a task's runtime is decided
@@ -1238,6 +1242,249 @@ a privileged rejection strands a unit until exactly one actor appears.
 The cost is now visible: **a unit can leave a gate with nothing recorded.** The
 rule still looks right to me, and the trade is no longer theoretical.
 
+## 28. Jira is the source of truth, and this workspace is the mirror
+
+The decision, in the Grand Master's words: *"Let's try first with Jira as a
+source of truth and Multica as a mirror."* One way. The mirror never writes to
+Jira, and a divergence is resolved by re-running rather than by editing the
+projection.
+
+**189 issues, 36 parent links, 0 unmapped statuses.** Run twice and the second
+run creates nothing.
+
+Three choices, each because the obvious alternative was worse.
+
+**Identity.** A Jira key is not a UUID, and `origin_type` on the issue API
+accepts exactly one value — `quick_create`, checked at `issue.go:3035`. Using
+the provenance field would have meant widening a product column and its
+allowlist so a spike could hold a foreign key. The mapping is the MIRROR's
+bookkeeping, so it lives in the mirror: a state file beside the script. The
+product gains no Jira-shaped field.
+
+**No level, then a level.** The first version declared no rung, so no gate could
+fire on a mirrored issue. Correct, and useless: the ladder is the thing under
+test and it carried nothing. The Grand Master: *"not all tickets are missions."*
+See §30.
+
+**Runs off.** Every write passes `suppress_run`. A mirrored status change
+replays a decision; it must not start an agent. Without it, importing sixty
+issues in `in progress` enqueues sixty runs against a backlog nobody asked to
+execute.
+
+**What does NOT travel, and this is the part worth keeping.** Run-time state. A
+unit moving to `in progress`, an agent claiming it, verdicts being written —
+none of it crosses. Only the outcome does. A mirror that replays every
+intermediate move is a sync, and a sync between two writers is the problem
+"Jira is the source of truth" was chosen to avoid.
+
+---
+
+## 29. `acli` removed the credential, and the first full run still died at 109
+
+The first mirror read Jira over REST with an API token from the environment. The
+Grand Master: *"Why not using the jira acli ?"* — `acli` was installed and
+already authenticated over OAuth. No token to mint, none to store, none for the
+script to hold. The whole credential paragraph went.
+
+**Then the first real run died**, at `GALACTEAM-109`, with *"failed to fetch
+work item details"*. That issue reads fine on its own. It was the API under 183
+sequential calls, and because every issue was read before anything was written,
+the crash discarded the run and wrote **nothing**.
+
+Two fixes, and the first is the interesting one:
+
+**Fewer calls, and the shape is dictated not chosen.** `search --fields`
+REJECTS `parent`; `view --fields '*all'` returns it. So the bulk read is one
+paginated search, and only the CHILDREN get a call each — 36 of 189 rather than
+189 of 189.
+
+**A retry, because one flake should not cost a run.**
+
+A third defect fell out of the same work. A Jira smart link carries no text
+node, only a URL in its attributes. Unhandled, a paragraph citing two issues
+came out citing neither — measured on GALACTEAM-184, whose first line lost both
+keys it named.
+
+---
+
+## 30. Not every ticket is a mission, and the tracker says how many rungs it can prove
+
+Jira expresses exactly two hierarchy levels in this project: **Epic at 1 (four
+of them) and Task / Story / Bug at 0 (185).** The ladder has five rungs.
+
+So the mirror fills the two Jira can prove and writes none of the others.
+Promoting GALACTEAM-132 to `mission` because it carries 25 children is a
+judgement, and **a judgement a script makes is a judgement nobody made.**
+
+A rung set by hand outranks the mapping and survives every later refresh.
+
+**And a declared rung turns the gates on**, which the mirror then hits: a gate
+refuses a forward move by anyone who is not the ratifier, and the mirror is not
+ratifying — it replays a decision Jira already holds. So the rung comes off for
+the write and goes back after, and what goes back is what the issue HELD.
+
+---
+
+## 31. A unit may be parked on several questions, and resumes on the last
+
+Migration 480 allowed one open hand per issue and said why: *"a second open hand
+on the same issue would mean two answers are needed before it can move, and
+nothing in the model expresses that ordering."*
+
+The premise is right and the conclusion was one step too far. Two answers ARE
+needed, and **no ordering is required** — the open hands are a set that has to
+empty, not a queue that has to drain.
+
+Found by probing a real ticket rather than a fixture. GALACTEAM-136 says, in its
+own words, *"What is open: Four questions, at a stop gate."* Three of the four
+were refused with a 409.
+
+The alternative was splitting the ticket into four whose only content is "decide
+X" — and `raised-hand.md` calls a raised hand *"the step without a rank"* while
+T2 splits WORK units. Filing a decision as a work item uses the wrong
+instrument.
+
+What replaces the index is the promotion rule, and **it is stricter than the
+index was**: a second question could only go unanswered if the unit could move
+while it was open, and it cannot. Before this, answering the first of several
+would have released a unit still blocked on the rest.
+
+Three consequences, each with a test that fails without it:
+
+| | |
+|---|---|
+| `status_before` belongs to the PARK, not the hand | by the second hand the unit is already parked, so `issue.Status` IS the park — recording it makes the unit resume into the state it stops in |
+| an answer names which hand | `GetOpenHandForIssue` stays a `:one` deliberately: with two rows it errors rather than picking, because answering the oldest applies a decision to a question nobody chose |
+| the response says `resumed` and `still_open` | a decider who answered one of four should not learn that from the board not moving |
+
+**Verified on real use, not a fixture.** The Grand Master answered both hands on
+GALACTEAM-178. The unit stayed parked after the first and resumed on the second.
+
+`trigger` was also write-only — required on the way in, validated against a
+closed set of three, justified in its own comment as one of two counters, and
+emitted by no read path at all. Same shape as `level` missing from four
+hand-built SELECTs (§26).
+
+---
+
+## 32. `needs discussion` had no question, five times out of five
+
+The contract calls it *"not startable until a consultation resolves it"*.
+Nothing recorded what the consultation was ABOUT.
+
+Measured on the mirrored backlog: **five issues in that status, zero carrying a
+question**, the oldest waiting since 2026-09-10. Every one had its real
+questions written in prose, under a heading called `To discuss`.
+
+So the status and the raised hand stopped being the same idea written twice.
+**The status is where a unit waits; the hand is what it waits for**, and the
+status now refuses a unit with no open question.
+
+**The flag is on the STATUS, not in a handler.** `needs_discussion` is not a
+built-in — it is a custom status this workspace created — so naming its key in
+Go would weld one team's vocabulary into the product. Default false: every
+status that exists today behaves exactly as it does.
+
+**Ask, then move**, and the order is not arbitrary: raising a hand parks the
+unit, so a unit moved in first is pulled straight back out.
+
+Only the ENTRY is guarded. Leaving is always open — rule 3 of the rung's gates,
+same shape and the same reason.
+
+The guard fails OPEN where the rung's gates fail closed. Those refuse because a
+ratifier said no; this one would refuse because a COUNT failed, and a lookup
+error must not read as "you have not asked your question".
+
+**The grooming that followed invented nothing.** Each of the five tickets
+already carried its questions in `To discuss`; what was lifted was the one that
+was bounded. The rest of each list is work that follows the answer.
+
+---
+
+## 33. A chat may be about a unit, and the brief tells it to contest
+
+Deciding a raised hand is a conversation. The only surface that carried the unit
+was the comment thread — and **a comment mention dispatches a WORK run**: the
+agent claims a task against the issue, arrives with the issue brief, and is
+ready to do the ticket when what you wanted was to argue about the question.
+
+A chat session already carried an optional project. It could not carry an issue,
+so an agent you talked to could not see the hand, its options, or the cost
+written against each.
+
+`chat_session.issue_id` binds one, and the chat brief gains the mirror image of
+the acceptance-criteria section: criteria tell an issue run what it will be
+judged against; the unit under discussion tells a chat what is being argued
+about.
+
+**The costs are rendered in full**, and that is the point. An option without the
+cost of being wrong on its side is a poll, and an agent asked to contest a
+recommendation needs exactly the thing the raiser thought it was risking. The
+section ends by saying the job is to contest rather than comply —
+`raised-hand.md`'s *"the lead's job is to contest first"*.
+
+Only OPEN hands travel. An answered one is history and its decision is already
+in the record; handing it over asks an agent to re-argue something settled.
+
+---
+
+## 34. The concerned agent is a lookup, never a guess
+
+*"Can't we have directly concerned agents on the top of the list?"*
+
+The tempting version is wrong. Mapping a question to a persona by its words —
+"design system" → Sabine — welds one team's roster into the product. Same defect
+avoided in §32 by putting the flag on the status.
+
+The non-guessing route already half existed: **a raised hand names the body of
+knowledge that failed to answer it.** It needed the other half — who holds that
+body of knowledge. `referential.owner_agent_id`, nullable and soft.
+
+That is `raised-hand.md`'s own *"the counter decides the staffing"* read
+forwards: a category of question earns an agent, and the agent then owns the
+category.
+
+**The mapping is the TEAM's, not the product's.** Multica stores an owner and
+says nothing about who it should be; that `design_system` is Sabine's is a fact
+about this roster and lives in the seeder. `unclassified` stays deliberately
+unowned — it means the raiser could not tell which reference was thin, and
+owning that routes every unclassifiable question to one desk.
+
+Measured on eleven real hands: two issues surface Sabine, one Galen, two
+Obi-Wan. **Two surface nobody**, because both questions are `unclassified` —
+and that is the finding, not the bug: the operating model has no referential of
+its own.
+
+---
+
+## 35. Three board filters, and the one that found 28 orphans
+
+Status, project, and "no project". Every one optional and independent.
+
+**The counts above the board do NOT narrow.** A filtered board that filtered its
+own totals could never say how much it was hiding, and the tabs would read as if
+the work had vanished rather than been excluded. That is what the test asserts,
+and it fails without the change — measured by neutralising the two clauses.
+
+An unknown status is a 400, not an empty board. An empty board reads as "nothing
+on this rung", which is the more expensive thing to be wrong about. One bad key
+among good ones still refuses: dropping it silently answers a question nobody
+asked and looks like it worked.
+
+**The status filter takes a SET.** "In review or qa" is one question, and asking
+it twice is a different thing. An empty set is every status, not none — the only
+reading that lets the control start with nothing ticked. Measured: backlog 21,
+todo 14, both 35, rung total 185 under all of them.
+
+**`project=none` exists because deleting a project DETACHES its issues** rather
+than removing them. The reference is soft on purpose — a project delete must not
+destroy work — but nothing surfaced what it left behind, and the project filter
+could not reach it because a detached unit has no id to select. **28 of them sat
+on every rung, invisible to every filter,** until the Grand Master noticed them
+by eye.
+
+---
+
 ## What was NOT done
 
 - **No parallel ratification.** Gates queue; they cannot both hold a unit. Two
@@ -1254,10 +1501,14 @@ rule still looks right to me, and the trade is no longer theoretical.
   defect. Whether that split is the right one is untested.
 - **Nothing reads the referential back.** A rule lands in `referential_entry` and
   is counted; no agent is handed it when it starts work. The loop is closed for
-  measurement, not for use. That is the honest limit of §21.
-- **Only ONE agent run, on one issue.** §27 is the whole of it. Nothing here has
-  been exercised by a squad, by a leader dispatching to members, by two agents on
-  one tree, or by anything with a repository attached.
+  measurement, not for use. That is the honest limit of §21. A referential now
+  has an OWNER (§34), which is a different thing: it says whose the reference is,
+  not what it says.
+- **Only ONE agent run, on one issue.** §27 is the whole of it, and it is still
+  the whole of it. Nothing here has been exercised by a squad, by a leader
+  dispatching to members, by two agents on one tree, or by anything with a
+  repository attached. The mirror (§28) put 189 real tickets in front of the
+  ladder and not one of them has been executed.
 - **A provider auth failure is diagnosable on one runtime and invisible on
   another.** The same cause — a dead credential — came back from Claude as a
   typed `agent_error.provider_auth_or_access`, a `failed` task and a comment on
@@ -1267,6 +1518,23 @@ rule still looks right to me, and the trade is no longer theoretical.
   ChatGPT" while `codex exec` gets `401 Unauthorized` and cannot refresh its
   token. A provider that cannot authenticate should produce a FAILED task, not a
   suspended one. Not a spike defect, and not fixed here.
+- **Nothing carries a decision back to the source of truth.** The mirror is one
+  way by design (§28). A hand answered in this workspace reaches Jira because a
+  person pastes it. GALACTEAM-186 is filed against that and has not landed, so
+  every decision taken here costs a manual write. The decision itself survives —
+  it is on the hand and in a Jira comment — the conversation around it does not.
+- **A unit parked from `backlog` resumes one rung higher.** `status_before` is
+  recorded, but `backlog` IS the park, so "came from backlog" and "no previous
+  status recorded" are the same value. The resume falls back to `todo`.
+  Deliberate — parking to `backlog` is what makes `WillEnqueueRun` re-fire — and
+  still a divergence the mirror corrects on its next run. Seen on GALACTEAM-178.
+- **The UI additions after §33 were never seen working.** The chat entry point,
+  the concerned-agent grouping and the multi-select status filter are verified by
+  types, tests and the API only: the browser tooling dropped partway through the
+  session and did not come back. Build evidence is not a screenshot.
+- **`requires_question` guards the status, not the flow.** A unit can still be
+  moved OUT of `needs discussion` with its question unanswered, which is correct
+  (§32), and nothing then records that the consultation never happened.
 - **A rebind strands pending work.** A queued task carries the runtime it was
   enqueued against. Rebinding an agent between runtimes leaves its queued task
   unclaimable with no error and no sweep — the daemon logs "task claim: no tasks
@@ -1327,6 +1595,20 @@ rule still looks right to me, and the trade is no longer theoretical.
 - [x] the criteria reach the agent that has to satisfy them
 - [x] criteria, verdicts and the gate, on the ticket and on the board
 - [x] a real agent run — AP-5 wrote three verdicts, and revoked one of mine
+- [x] the team's own backlog mirrored in, 189 issues, one way, idempotent
+- [x] rungs assigned from the tracker's own hierarchy, and no finer
+- [x] several open hands on one unit, resuming on the last
+- [x] a status that refuses a unit carrying no question
+- [x] five empty `needs discussion` tickets groomed, questions lifted not invented
+- [x] a chat bound to a unit, briefed to contest rather than comply
+- [x] a referential with an owner, so the concerned agent is a lookup
+- [x] board filters: status as a set, project, and the 28 orphans nothing could find
+- [x] two real decisions taken here and written back to the source of truth
 
 Whether any of this is worth proposing upstream is a decision for later and was
 not part of this session.
+
+**What travels without the fork.** This file is the product-side record and dies
+with the branch. What the exercise learned about Galactics itself is in that
+repository, as `missions/multica-as-runtime/`, under GALACTEAM-200 — four open
+findings, each a gap in the documents rather than in anything built here.
