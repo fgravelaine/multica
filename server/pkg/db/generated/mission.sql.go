@@ -382,7 +382,10 @@ WHERE COALESCE(r.level, r.derived) = $1::text
   -- also filtered its own totals could never tell you how much you were hiding.
   AND (NOT $2::boolean OR (r.level IS NOT NULL AND r.level <> r.derived))
   AND ($3::uuid IS NULL OR r.root_id = $3::uuid)
-  AND ($4::text IS NULL OR i.status = $4::text)
+  -- An empty array is "every status", not "no status". A filter that means
+  -- nothing when nothing is chosen is the only reading that lets the control
+  -- start with every box unticked.
+  AND (cardinality($4::text[]) = 0 OR i.status = ANY($4::text[]))
   AND ($5::uuid IS NULL OR i.project_id = $5::uuid)
   -- "No project" is its own filter, not a project id, because a detached unit
   -- has none to name. Deleting a project DETACHES its issues rather than
@@ -398,7 +401,7 @@ type ListIssuesAtLevelParams struct {
 	Level       string      `json:"level"`
 	OrphansOnly bool        `json:"orphans_only"`
 	CampaignID  pgtype.UUID `json:"campaign_id"`
-	Status      pgtype.Text `json:"status"`
+	Statuses    []string    `json:"statuses"`
 	ProjectID   pgtype.UUID `json:"project_id"`
 	Projectless bool        `json:"projectless"`
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
@@ -433,7 +436,7 @@ func (q *Queries) ListIssuesAtLevel(ctx context.Context, arg ListIssuesAtLevelPa
 		arg.Level,
 		arg.OrphansOnly,
 		arg.CampaignID,
-		arg.Status,
+		arg.Statuses,
 		arg.ProjectID,
 		arg.Projectless,
 		arg.WorkspaceID,

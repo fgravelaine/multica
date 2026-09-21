@@ -27,6 +27,14 @@ import type { MissionBoardRow, MissionLevel } from "@multica/core/types";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@multica/ui/components/ui/dropdown-menu";
 import { cn } from "@multica/ui/lib/utils";
 
 const RUNGS: { level: MissionLevel; label: string }[] = [
@@ -54,7 +62,9 @@ export function MissionList() {
   const [campaign, setCampaign] = useState<{ id: string; title: string } | null>(null);
   // "" is "every one of them", not "none" — an empty filter is the board's
   // resting state, and the server reads a missing parameter the same way.
-  const [status, setStatus] = useState("");
+  // A SET, not a value. Empty means every status — the control starts with
+  // nothing ticked and that has to mean "do not filter", not "show nothing".
+  const [statuses, setStatuses] = useState<string[]>([]);
   const [project, setProject] = useState("");
 
   const wsId = useWorkspaceId();
@@ -67,19 +77,19 @@ export function MissionList() {
   const projects = projectData?.projects ?? [];
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["missions", level, orphansOnly, campaign?.id ?? null, status, project],
+    queryKey: ["missions", level, orphansOnly, campaign?.id ?? null, [...statuses].sort().join(","), project],
     queryFn: () =>
       api.listMissions({
         level,
         orphans: orphansOnly,
         campaign: campaign?.id,
-        status: status || undefined,
+        statuses,
         project: project || undefined,
       }),
   });
 
   const orphansHere = data?.levels.find((l) => l.level === level)?.orphans ?? 0;
-  const filtered = Boolean(status || project || campaign || orphansOnly);
+  const filtered = Boolean(statuses.length || project || campaign || orphansOnly);
 
   return (
     <div className="h-full min-h-0 overflow-y-auto overscroll-contain">
@@ -147,24 +157,53 @@ export function MissionList() {
             On their own
           </button>
 
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            aria-label="Filter by status"
-            className={cn(
-              "rounded-md border bg-transparent px-2 py-0.5 text-caption transition-colors",
-              status
-                ? "border-foreground/30 bg-accent text-foreground"
-                : "text-muted-foreground hover:border-foreground/20",
-            )}
-          >
-            <option value="">Any status</option>
-            {activeStatuses.map((s) => (
-              <option key={s.key} value={s.key}>
-                {s.name}
-              </option>
-            ))}
-          </select>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label="Filter by status"
+                  className={cn(
+                    "rounded-md border px-2 py-0.5 text-caption transition-colors",
+                    statuses.length > 0
+                      ? "border-foreground/30 bg-accent text-foreground"
+                      : "text-muted-foreground hover:border-foreground/20",
+                  )}
+                />
+              }
+            >
+              {statuses.length === 0
+                ? "Any status"
+                : statuses.length === 1
+                  ? activeStatuses.find((s) => s.key === statuses[0])?.name ?? "1 status"
+                  : `${statuses.length} statuses`}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-auto min-w-44">
+              {activeStatuses.map((s) => (
+                <DropdownMenuCheckboxItem
+                  key={s.key}
+                  checked={statuses.includes(s.key)}
+                  onCheckedChange={() =>
+                    setStatuses((prev) =>
+                      prev.includes(s.key)
+                        ? prev.filter((k) => k !== s.key)
+                        : [...prev, s.key],
+                    )
+                  }
+                >
+                  <span className="flex-1">{s.name}</span>
+                </DropdownMenuCheckboxItem>
+              ))}
+              {statuses.length > 0 ? (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => setStatuses([])}>
+                    Clear
+                  </DropdownMenuItem>
+                </>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
 
           <select
             value={project}

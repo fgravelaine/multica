@@ -119,8 +119,14 @@ func TestMissionBoardFilters_NarrowRowsNotCounts(t *testing.T) {
 		want  int
 	}{
 		{"one status", "?level=task&status=todo", 2},
+		// The reason the filter is a set: "todo or in_progress" is one
+		// question, and asking it twice is a different thing.
+		{"two statuses", "?level=task&status=todo&status=in_progress", 4},
+		{"two statuses, comma form", "?level=task&status=todo,in_progress", 4},
+		{"a status repeated", "?level=task&status=todo&status=todo", 2},
 		{"one project", "?level=task&project=" + projectA, 2},
 		{"both", "?level=task&status=todo&project=" + projectA, 1},
+		{"two statuses and a project", "?level=task&status=todo&status=in_progress&project=" + projectA, 2},
 		{"both, other project", "?level=task&status=in_progress&project=" + projectB, 1},
 	}
 	for _, tc := range cases {
@@ -185,5 +191,14 @@ func TestMissionBoardFilters_UnknownStatusIsRefused(t *testing.T) {
 		"/api/missions?level=task&status=not_a_status", nil))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("unknown status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+
+	// One bad key among good ones still refuses. Dropping it silently would
+	// answer a question nobody asked and look like it worked.
+	rec = httptest.NewRecorder()
+	testHandler.ListMissions(rec, newRequest(http.MethodGet,
+		"/api/missions?level=task&status=todo&status=not_a_status", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("one bad key among good ones = %d, want 400: %s", rec.Code, rec.Body.String())
 	}
 }

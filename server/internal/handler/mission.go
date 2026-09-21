@@ -1460,16 +1460,37 @@ func (h *Handler) ListMissions(w http.ResponseWriter, r *http.Request) {
 		campaignFilter = parsed
 	}
 
-	// A status has to exist in THIS workspace's catalog. Resolving it here is
-	// what turns a typo into a 400 instead of an empty board, which reads as
-	// "nothing at this rung" and is the more expensive answer to be wrong about.
-	var statusFilter pgtype.Text
-	if raw := r.URL.Query().Get("status"); raw != "" {
-		key, ok := h.resolveIssueStatusKey(w, r, wsUUID, raw)
-		if !ok {
-			return
+	// Several statuses, because "in review or qa" is one question and asking it
+	// twice is not the same thing. Repeated `?status=` and one comma-separated
+	// value are both accepted: the first is what a checkbox list produces, the
+	// second is what a person types.
+	//
+	// Every one has to exist in THIS workspace's catalog. Resolving here is what
+	// turns a typo into a 400 instead of an empty board, which reads as "nothing
+	// at this rung" and is the more expensive answer to be wrong about.
+	var statusFilter []string
+	seenStatus := make(map[string]struct{})
+	for _, raw := range r.URL.Query()["status"] {
+		for _, part := range strings.Split(raw, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			key, ok := h.resolveIssueStatusKey(w, r, wsUUID, part)
+			if !ok {
+				return
+			}
+			if _, dup := seenStatus[key]; dup {
+				continue
+			}
+			seenStatus[key] = struct{}{}
+			statusFilter = append(statusFilter, key)
 		}
-		statusFilter = pgtype.Text{String: key, Valid: true}
+	}
+	if statusFilter == nil {
+		// The query reads an empty array as "every status"; a nil slice would
+		// reach Postgres as NULL and match nothing.
+		statusFilter = []string{}
 	}
 
 	// `project=none` is the detached units, which no project id can name.
@@ -1515,7 +1536,7 @@ func (h *Handler) ListMissions(w http.ResponseWriter, r *http.Request) {
 		Level:       level,
 		OrphansOnly: orphansOnly,
 		CampaignID:  campaignFilter,
-		Status:      statusFilter,
+		Statuses:    statusFilter,
 		ProjectID:   projectFilter,
 		Projectless: projectless,
 	})

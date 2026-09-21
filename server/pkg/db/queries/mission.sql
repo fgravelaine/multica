@@ -358,7 +358,10 @@ WHERE COALESCE(r.level, r.derived) = @level::text
   -- also filtered its own totals could never tell you how much you were hiding.
   AND (NOT @orphans_only::boolean OR (r.level IS NOT NULL AND r.level <> r.derived))
   AND (sqlc.narg('campaign_id')::uuid IS NULL OR r.root_id = sqlc.narg('campaign_id')::uuid)
-  AND (sqlc.narg('status')::text IS NULL OR i.status = sqlc.narg('status')::text)
+  -- An empty array is "every status", not "no status". A filter that means
+  -- nothing when nothing is chosen is the only reading that lets the control
+  -- start with every box unticked.
+  AND (cardinality(@statuses::text[]) = 0 OR i.status = ANY(@statuses::text[]))
   AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id')::uuid)
   -- "No project" is its own filter, not a project id, because a detached unit
   -- has none to name. Deleting a project DETACHES its issues rather than

@@ -4389,14 +4389,15 @@ export class ApiClient {
     level?: string;
     orphans?: boolean;
     campaign?: string;
-    status?: string;
+    /** Several, because "in review or qa" is one question. Empty is every status. */
+    statuses?: string[];
     project?: string;
   }): Promise<MissionBoardResponse> {
     const q = new URLSearchParams();
     if (params?.level) q.set("level", params.level);
     if (params?.orphans) q.set("orphans", "1");
     if (params?.campaign) q.set("campaign", params.campaign);
-    if (params?.status) q.set("status", params.status);
+    for (const status of params?.statuses ?? []) q.append("status", status);
     if (params?.project) q.set("project", params.project);
     const suffix = q.size > 0 ? `?${q.toString()}` : "";
     return this.fetch<MissionBoardResponse>(`/api/missions${suffix}`);
