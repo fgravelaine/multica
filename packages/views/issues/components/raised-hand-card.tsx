@@ -17,10 +17,12 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Hand, Check } from "lucide-react";
+import { Hand, Check, MessagesSquare } from "lucide-react";
 import { api } from "@multica/core/api";
-import type { RaisedHand } from "@multica/core/types";
+import type { Agent, RaisedHand } from "@multica/core/types";
+import { useWorkspacePaths } from "@multica/core/paths";
 import { cn } from "@multica/ui/lib/utils";
+import { useNavigation } from "../../navigation";
 
 export function RaisedHandCard({ issueId }: { issueId: string }) {
   const queryClient = useQueryClient();
@@ -66,6 +68,8 @@ export function RaisedHandCard({ issueId }: { issueId: string }) {
           The unit stays parked until every one is answered.
         </p>
       ) : null}
+      <DiscussWithAgent issueId={issueId} />
+
       {open.map((hand: RaisedHand) => (
         <HandBlock
           key={hand.id}
@@ -78,6 +82,63 @@ export function RaisedHandCard({ issueId }: { issueId: string }) {
           }}
         />
       ))}
+    </div>
+  );
+}
+
+// PICKING AN OPTION IS NOT THE ONLY THING YOU MAY WANT TO DO WITH A QUESTION.
+//
+// The alternative was the comment thread, and a comment mention dispatches a
+// WORK run: the agent claims a task against this issue and arrives with the
+// issue brief, ready to do the ticket. What you want here is to argue.
+//
+// A chat bound to this issue gets a brief carrying the unit and every open
+// hand with its costs, and the instruction to contest rather than comply. The
+// conversation is the lead's job in `raised-hand.md` — "contest first, the
+// answer is often already in a reference".
+function DiscussWithAgent({ issueId }: { issueId: string }) {
+  const paths = useWorkspacePaths();
+  const navigation = useNavigation();
+  const [agentId, setAgentId] = useState("");
+
+  const { data: agents } = useQuery({
+    queryKey: ["agents", "for-discussion"],
+    queryFn: () => api.listAgents(),
+  });
+
+  const start = useMutation({
+    mutationFn: (id: string) =>
+      api.createChatSession({ agent_id: id, issue_id: issueId }),
+    onSuccess: (session) => navigation.push(paths.chatSession(session.id)),
+  });
+
+  const roster = (agents ?? []).filter((a: Agent) => !a.archived_at);
+  if (roster.length === 0) return null;
+
+  return (
+    <div className="mb-3 flex items-center gap-2">
+      <MessagesSquare className="size-3.5 shrink-0 text-muted-foreground" />
+      <select
+        value={agentId}
+        disabled={start.isPending}
+        onChange={(e) => {
+          const id = e.target.value;
+          setAgentId(id);
+          if (id) start.mutate(id);
+        }}
+        aria-label="Discuss this with an agent"
+        className="rounded-md border bg-transparent px-2 py-0.5 text-caption text-muted-foreground transition-colors hover:border-foreground/20 disabled:opacity-60"
+      >
+        <option value="">Talk it through with…</option>
+        {roster.map((a: Agent) => (
+          <option key={a.id} value={a.id}>
+            {a.name}
+          </option>
+        ))}
+      </select>
+      {start.isPending ? (
+        <span className="text-caption text-muted-foreground">opening…</span>
+      ) : null}
     </div>
   );
 }
