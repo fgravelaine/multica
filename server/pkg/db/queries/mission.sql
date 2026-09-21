@@ -360,6 +360,13 @@ WHERE COALESCE(r.level, r.derived) = @level::text
   AND (sqlc.narg('campaign_id')::uuid IS NULL OR r.root_id = sqlc.narg('campaign_id')::uuid)
   AND (sqlc.narg('status')::text IS NULL OR i.status = sqlc.narg('status')::text)
   AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id')::uuid)
+  -- "No project" is its own filter, not a project id, because a detached unit
+  -- has none to name. Deleting a project DETACHES its issues rather than
+  -- removing them — the reference is soft on purpose, a project delete must
+  -- not destroy work — so without this the orphans are on every rung and
+  -- reachable by no filter. 28 of them sat there unfindable until someone
+  -- noticed them by eye.
+  AND (NOT @projectless::boolean OR i.project_id IS NULL)
 ORDER BY i.last_activity_at DESC NULLS LAST, i.number DESC;
 
 -- name: ListMissionDependencies :many

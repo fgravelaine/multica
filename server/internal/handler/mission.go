@@ -1472,13 +1472,19 @@ func (h *Handler) ListMissions(w http.ResponseWriter, r *http.Request) {
 		statusFilter = pgtype.Text{String: key, Valid: true}
 	}
 
+	// `project=none` is the detached units, which no project id can name.
 	var projectFilter pgtype.UUID
+	projectless := false
 	if raw := r.URL.Query().Get("project"); raw != "" {
-		parsed, ok := parseUUIDOrBadRequest(w, raw, "project")
-		if !ok {
-			return
+		if raw == "none" {
+			projectless = true
+		} else {
+			parsed, ok := parseUUIDOrBadRequest(w, raw, "project")
+			if !ok {
+				return
+			}
+			projectFilter = parsed
 		}
-		projectFilter = parsed
 	}
 
 	counts, err := h.Queries.CountIssuesByLevel(r.Context(), db.CountIssuesByLevelParams{
@@ -1511,6 +1517,7 @@ func (h *Handler) ListMissions(w http.ResponseWriter, r *http.Request) {
 		CampaignID:  campaignFilter,
 		Status:      statusFilter,
 		ProjectID:   projectFilter,
+		Projectless: projectless,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list the board")

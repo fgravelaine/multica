@@ -178,6 +178,10 @@ export function MissionList() {
             )}
           >
             <option value="">Any project</option>
+            {/* Deleting a project DETACHES its issues rather than removing
+                them, so "no project" is a real population and needs its own
+                entry — a detached unit has no id to select. */}
+            <option value="none">No project</option>
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.title}

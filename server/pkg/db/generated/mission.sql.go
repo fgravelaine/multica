@@ -334,14 +334,14 @@ const listIssuesAtLevel = `-- name: ListIssuesAtLevel :many
 WITH RECURSIVE walk AS (
     SELECT i.id, i.parent_issue_id, i.level, 0::int AS depth, i.id AS root_id
     FROM issue i
-    WHERE i.workspace_id = $6 AND i.parent_issue_id IS NULL
+    WHERE i.workspace_id = $7 AND i.parent_issue_id IS NULL
 
     UNION ALL
 
     SELECT c.id, c.parent_issue_id, c.level, w.depth + 1, w.root_id
     FROM issue c
     JOIN walk w ON c.parent_issue_id = w.id
-    WHERE w.depth + 1 <= $7::int
+    WHERE w.depth + 1 <= $8::int
 ),
 rung AS (
     SELECT
@@ -384,6 +384,13 @@ WHERE COALESCE(r.level, r.derived) = $1::text
   AND ($3::uuid IS NULL OR r.root_id = $3::uuid)
   AND ($4::text IS NULL OR i.status = $4::text)
   AND ($5::uuid IS NULL OR i.project_id = $5::uuid)
+  -- "No project" is its own filter, not a project id, because a detached unit
+  -- has none to name. Deleting a project DETACHES its issues rather than
+  -- removing them — the reference is soft on purpose, a project delete must
+  -- not destroy work — so without this the orphans are on every rung and
+  -- reachable by no filter. 28 of them sat there unfindable until someone
+  -- noticed them by eye.
+  AND (NOT $6::boolean OR i.project_id IS NULL)
 ORDER BY i.last_activity_at DESC NULLS LAST, i.number DESC
 `
 
@@ -393,6 +400,7 @@ type ListIssuesAtLevelParams struct {
 	CampaignID  pgtype.UUID `json:"campaign_id"`
 	Status      pgtype.Text `json:"status"`
 	ProjectID   pgtype.UUID `json:"project_id"`
+	Projectless bool        `json:"projectless"`
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 	MaxDepth    int32       `json:"max_depth"`
 }
@@ -427,6 +435,7 @@ func (q *Queries) ListIssuesAtLevel(ctx context.Context, arg ListIssuesAtLevelPa
 		arg.CampaignID,
 		arg.Status,
 		arg.ProjectID,
+		arg.Projectless,
 		arg.WorkspaceID,
 		arg.MaxDepth,
 	)

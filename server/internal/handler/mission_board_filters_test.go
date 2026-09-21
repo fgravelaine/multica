@@ -145,6 +145,35 @@ func TestMissionBoardFilters_NarrowRowsNotCounts(t *testing.T) {
 	}
 }
 
+// `project=none` finds the units a deleted project left behind. Without it
+// they are on every rung and reachable by no filter, which is how 28 of them
+// sat unnoticed until someone spotted them by eye.
+func TestMissionBoardFilters_NoProjectFindsDetachedUnits(t *testing.T) {
+	boardFixture(t)
+
+	// One more, deliberately detached — what a project delete leaves.
+	ctx := context.Background()
+	var id string
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO issue (workspace_id, title, status, level, number, creator_type, creator_id)
+		 VALUES ($1, 'filter detached', 'todo', 'task',
+		         (SELECT COALESCE(MAX(number), 0) + 1 FROM issue WHERE workspace_id = $1),
+		         'member', $2)
+		 RETURNING id`, testWorkspaceID, testUserID).Scan(&id); err != nil {
+		t.Fatalf("seed detached: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, id) })
+
+	got := board(t, "?level=task&project=none")
+	if n := countTitled(got.Rows, "filter detached"); n != 1 {
+		t.Errorf("detached rows = %d, want the 1 seeded", n)
+	}
+	// And it excludes the ones that DO have a project.
+	if n := countTitled(got.Rows, "filter A"); n != 0 {
+		t.Errorf("project=none returned %d attached rows, want none", n)
+	}
+}
+
 // A status that is not in this workspace's catalog is a 400, not an empty
 // board. An empty board reads as "nothing on this rung", which is the more
 // expensive thing to be wrong about.
