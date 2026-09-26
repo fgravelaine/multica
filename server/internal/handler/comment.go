@@ -1512,7 +1512,15 @@ const (
 	commentTriggerSourceMentionSquadLeader commentAgentTriggerSource = "mention_squad_leader"
 	commentTriggerSourceThreadParent       commentAgentTriggerSource = "thread_parent"
 	commentTriggerSourceConversation       commentAgentTriggerSource = "conversation_continuation"
+	commentTriggerSourceCounterpart        commentAgentTriggerSource = "counterpart"
 )
+
+// commentCounterpartWakeCap is NID-22's "three review rounds": once this many
+// consecutive non-member comments have landed on an issue since the last
+// member comment, the counterpart mechanism below stops waking anyone. A
+// forgotten `/note` on the approval only costs runs up to this cap, never an
+// unbounded stall.
+const commentCounterpartWakeCap = 6
 
 type commentAgentTrigger struct {
 	Agent          db.Agent
@@ -1548,6 +1556,8 @@ func commentAgentTriggerReason(trigger commentAgentTrigger) string {
 		return "This reply will trigger the parent comment's author."
 	case commentTriggerSourceConversation:
 		return "This follow-up will continue the recent agent conversation."
+	case commentTriggerSourceCounterpart:
+		return "This comment will trigger its review counterpart."
 	default:
 		return "This comment will trigger this agent."
 	}
@@ -2691,19 +2701,34 @@ func (h *Handler) computeCommentAgentTriggers(ctx context.Context, issue db.Issu
 	if actorType != "member" {
 		// Agent-authored comments do not participate in the member-driven
 		// conversation routing (parent-author / thread-root continuation) or
-		// the member assignee fallback. They retain one narrow path restored
-		// after MUL-3794 (MUL-3879): a worker-agent result comment on a
-		// squad-assigned issue can still wake the assigned squad leader, so
-		// the leader→worker→leader coordination loop stays closed. The leader
-		// self-trigger guard lives in
+		// the member assignee fallback. They retain two paths, both narrow.
+		// The first, restored after MUL-3794 (MUL-3879): a worker-agent result
+		// comment on a squad-assigned issue can still wake the assigned squad
+		// leader, so the leader→worker→leader coordination loop stays closed.
+		// The leader self-trigger guard lives in
 		// routeAssignedSquadLeaderFallback. Explicit @agent / @squad mentions
 		// are already handled above, so this never double-enqueues a mentioned
-		// target alongside the assigned leader.
+		// target alongside the assigned leader. Squad-assigned issues keep
+		// exactly this path — the second, below, only applies when the issue
+		// is assigned to an agent.
 		if issue.AssigneeType.Valid && issue.AssigneeType.String == "squad" {
 			if trigger, ok := h.routeAssignedSquadLeaderFallback(ctx, issue, actorType, actorID, opts); ok {
 				trigger.NonLeaderAgentReply = actorType == "agent" && actorID != uuidToString(trigger.Agent.ID)
 				return []commentAgentTrigger{trigger}, nil
 			}
+			return nil, nil
+		}
+
+		// NID-22's mechanism: on an agent-assigned issue, an agent comment
+		// wakes its review counterpart with no mention needed — this is
+		// upstream's squad-leader loop, generalised to creator ↔ assignee.
+		// The cap below is the loop's only brake: it never inspects who is
+		// waking whom, only how many non-member comments have landed in a row.
+		if h.commentCounterpartCapReached(ctx, issue) {
+			return nil, nil
+		}
+		if trigger, ok := h.routeCommentCounterpart(ctx, issue, actorType, actorID, opts); ok {
+			return []commentAgentTrigger{trigger}, nil
 		}
 		return nil, nil
 	}
@@ -3005,6 +3030,85 @@ func (h *Handler) routeAssignedSquadLeaderFallback(ctx context.Context, issue db
 		return commentAgentTrigger{}, false
 	}
 	return commentAgentTrigger{Agent: agent, Source: commentTriggerSourceIssueAssignee, Squad: &squad, AlreadyPending: hasPending}, true
+}
+
+// routeCommentCounterpart implements NID-22's mechanism: on an agent-assigned
+// issue, an agent-authored comment wakes its review counterpart with no
+// mention needed.
+//
+//   - The author is the assignee -> wake the issue's creator, when it is
+//     another agent. If the creator is a member, wake the parent issue's
+//     assignee instead, when it is another agent. (Eitri hands back ->
+//     Mótsognir, who created the task.)
+//   - The author is not the assignee -> wake the assignee, when it is an
+//     agent. (Mótsognir asks for changes -> Eitri.)
+//
+// Never targets the comment's own author. Squad-assigned issues keep
+// MUL-3879's leader-only path instead (handled by the caller).
+func (h *Handler) routeCommentCounterpart(ctx context.Context, issue db.Issue, actorType, actorID string, opts commentTriggerComputeOptions) (commentAgentTrigger, bool) {
+	if !issue.AssigneeType.Valid || issue.AssigneeType.String != "agent" || !issue.AssigneeID.Valid {
+		return commentAgentTrigger{}, false
+	}
+
+	var targetID pgtype.UUID
+	if actorID == uuidToString(issue.AssigneeID) {
+		if issue.CreatorType == "agent" && issue.CreatorID.Valid {
+			targetID = issue.CreatorID
+		} else if issue.ParentIssueID.Valid {
+			parent, err := h.Queries.GetIssue(ctx, issue.ParentIssueID)
+			if err != nil || !parent.AssigneeType.Valid || parent.AssigneeType.String != "agent" || !parent.AssigneeID.Valid {
+				return commentAgentTrigger{}, false
+			}
+			targetID = parent.AssigneeID
+		} else {
+			return commentAgentTrigger{}, false
+		}
+	} else {
+		targetID = issue.AssigneeID
+	}
+
+	if !targetID.Valid || actorID == uuidToString(targetID) {
+		return commentAgentTrigger{}, false
+	}
+
+	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+		ID:          targetID,
+		WorkspaceID: issue.WorkspaceID,
+	})
+	if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
+		return commentAgentTrigger{}, false
+	}
+	if !h.canInvokeAgent(ctx, agent, actorType, actorID, opts.OriginatorUserID, uuidToString(issue.WorkspaceID)) {
+		return commentAgentTrigger{}, false
+	}
+	hasPending, err := h.hasPendingTaskForIssueAndAgent(ctx, issue.ID, targetID, opts)
+	if err != nil {
+		return commentAgentTrigger{}, false
+	}
+	return commentAgentTrigger{Agent: agent, Source: commentTriggerSourceCounterpart, AlreadyPending: hasPending}, true
+}
+
+// commentCounterpartCapReached reports whether the newest
+// commentCounterpartWakeCap+1 comments on the issue are all non-member —
+// i.e. this comment would be the (cap+1)-th consecutive agent comment since
+// the last member comment. It only counts; it never inspects routing.
+func (h *Handler) commentCounterpartCapReached(ctx context.Context, issue db.Issue) bool {
+	comments, err := h.Queries.ListCommentsForIssue(ctx, db.ListCommentsForIssueParams{
+		IssueID:     issue.ID,
+		WorkspaceID: issue.WorkspaceID,
+		Limit:       int32(commentCounterpartWakeCap + 1),
+	})
+	if err != nil {
+		return false
+	}
+	consecutive := 0
+	for i := len(comments) - 1; i >= 0; i-- {
+		if comments[i].AuthorType == "member" {
+			break
+		}
+		consecutive++
+	}
+	return consecutive > commentCounterpartWakeCap
 }
 
 func (h *Handler) hasPendingTaskForIssueAndAgent(ctx context.Context, issueID, agentID pgtype.UUID, opts commentTriggerComputeOptions) (bool, error) {
