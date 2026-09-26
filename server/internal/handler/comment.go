@@ -3088,27 +3088,56 @@ func (h *Handler) routeCommentCounterpart(ctx context.Context, issue db.Issue, a
 	return commentAgentTrigger{Agent: agent, Source: commentTriggerSourceCounterpart, AlreadyPending: hasPending}, true
 }
 
+// commentCounterpartCapMaxWindow bounds the paging in
+// commentCounterpartCapReached: how far back it will look for
+// commentCounterpartWakeCap+1 agent comments before giving up and treating
+// the cap as not reached.
+const commentCounterpartCapMaxWindow = 200
+
 // commentCounterpartCapReached reports whether the newest
-// commentCounterpartWakeCap+1 comments on the issue are all non-member —
-// i.e. this comment would be the (cap+1)-th consecutive agent comment since
-// the last member comment. It only counts; it never inspects routing.
+// commentCounterpartWakeCap+1 AGENT comments on the issue landed with no
+// member comment among or after them — i.e. this comment would be the
+// (cap+1)-th consecutive agent comment since the last member comment. It
+// only counts; it never inspects routing.
+//
+// System comments (child-done notices, runtime-unusable notices, hand
+// raise/answer) neither count toward the cap nor reset it: NID-22 rule 4
+// caps agent comments, and a system comment sitting between two review
+// rounds must not spend one of the six slots. Because a fixed-size window
+// could still be filled entirely by system rows and hide every agent
+// comment behind them, this pages backwards until it finds cap+1 agent
+// comments, a member comment, or the start of the issue.
 func (h *Handler) commentCounterpartCapReached(ctx context.Context, issue db.Issue) bool {
-	comments, err := h.Queries.ListCommentsForIssue(ctx, db.ListCommentsForIssueParams{
-		IssueID:     issue.ID,
-		WorkspaceID: issue.WorkspaceID,
-		Limit:       int32(commentCounterpartWakeCap + 1),
-	})
-	if err != nil {
-		return false
-	}
-	consecutive := 0
-	for i := len(comments) - 1; i >= 0; i-- {
-		if comments[i].AuthorType == "member" {
-			break
+	limit := commentCounterpartWakeCap + 1
+	for {
+		comments, err := h.Queries.ListCommentsForIssue(ctx, db.ListCommentsForIssueParams{
+			IssueID:     issue.ID,
+			WorkspaceID: issue.WorkspaceID,
+			Limit:       int32(limit),
+		})
+		if err != nil {
+			return false
 		}
-		consecutive++
+		consecutiveAgent := 0
+		for i := len(comments) - 1; i >= 0; i-- {
+			switch comments[i].AuthorType {
+			case "member":
+				return false
+			case "agent":
+				consecutiveAgent++
+				if consecutiveAgent > commentCounterpartWakeCap {
+					return true
+				}
+			}
+		}
+		if len(comments) < limit || limit >= commentCounterpartCapMaxWindow {
+			return false
+		}
+		limit *= 2
+		if limit > commentCounterpartCapMaxWindow {
+			limit = commentCounterpartCapMaxWindow
+		}
 	}
-	return consecutive > commentCounterpartWakeCap
 }
 
 func (h *Handler) hasPendingTaskForIssueAndAgent(ctx context.Context, issueID, agentID pgtype.UUID, opts commentTriggerComputeOptions) (bool, error) {

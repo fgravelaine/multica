@@ -246,6 +246,66 @@ func TestCommentCounterpart_CapAfterSixConsecutive(t *testing.T) {
 	}
 }
 
+// TestCommentCounterpart_SystemCommentNeitherCountsNorResets: a system
+// comment (child-done notice, hand raise/answer, ...) sitting among the six
+// consecutive agent comments neither spends a slot nor resets the count —
+// only author_type == "agent" counts toward the cap. The 7th agent comment
+// still wakes nobody.
+func TestCommentCounterpart_SystemCommentNeitherCountsNorResets(t *testing.T) {
+	ctx := context.Background()
+	assigneeID := createHandlerTestAgent(t, "Counterpart System Assignee", nil)
+	creatorID := createHandlerTestAgent(t, "Counterpart System Creator", nil)
+
+	issueID := dbfx.Issue(t, "system comment among six", testutil.Cols{
+		"assignee_type": "agent",
+		"assignee_id":   assigneeID,
+		"creator_type":  "agent",
+		"creator_id":    creatorID,
+	})
+	issue, err := testHandler.Queries.GetIssue(ctx, util.MustParseUUID(issueID))
+	if err != nil {
+		t.Fatalf("load issue: %v", err)
+	}
+
+	// Three agent comments, a system comment, then three more agent comments:
+	// six agent comments total, still no member comment in between, so the
+	// sixth must still wake the creator.
+	for i := 1; i <= 3; i++ {
+		content := fmt.Sprintf("round %d", i)
+		dbfx.Comment(t, issueID, content, testutil.Cols{
+			"author_type": "agent",
+			"author_id":   assigneeID,
+		})
+	}
+	dbfx.Comment(t, issueID, "child issue done", testutil.Cols{
+		"author_type": "system",
+		"author_id":   "00000000-0000-0000-0000-000000000000",
+	})
+	var sixthContent string
+	for i := 4; i <= 6; i++ {
+		sixthContent = fmt.Sprintf("round %d", i)
+		dbfx.Comment(t, issueID, sixthContent, testutil.Cols{
+			"author_type": "agent",
+			"author_id":   assigneeID,
+		})
+	}
+	triggers, _ := testHandler.computeCommentAgentTriggers(ctx, issue, sixthContent, nil, "agent", assigneeID, commentTriggerComputeOptions{})
+	if _, ok := counterpartTriggerAgentID(triggers); !ok {
+		t.Fatalf("6th agent comment (with a system comment among them) triggered none, want a counterpart trigger")
+	}
+
+	// The 7th consecutive agent comment wakes nobody.
+	seventhContent := "round 7"
+	dbfx.Comment(t, issueID, seventhContent, testutil.Cols{
+		"author_type": "agent",
+		"author_id":   assigneeID,
+	})
+	triggers, _ = testHandler.computeCommentAgentTriggers(ctx, issue, seventhContent, nil, "agent", assigneeID, commentTriggerComputeOptions{})
+	if got, ok := counterpartTriggerAgentID(triggers); ok {
+		t.Fatalf("7th consecutive agent comment triggered %v, want none (cap reached)", got)
+	}
+}
+
 // TestCommentCounterpart_SquadAssignedUnchanged: a squad-assigned issue keeps
 // MUL-3879's leader-only path; the new counterpart mechanism never applies.
 func TestCommentCounterpart_SquadAssignedUnchanged(t *testing.T) {
